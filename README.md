@@ -43,7 +43,9 @@ A Go check uses only standard-library types:
 func VerifyXxx(ctx context.Context, [files []string], [provided...], w io.Writer) error
 ```
 
-It writes findings as `path:line: message`. A check returning `(T, error)`
+It writes findings as `path:line: message` and fails by returning an error;
+what a passing check writes is shown as its log, and `--report github` turns
+its findings into warnings. A check returning `(T, error)`
 provides `T` to checks of the same package that take it. Test names must be
 static; what ytif cannot list exactly fails discovery.
 

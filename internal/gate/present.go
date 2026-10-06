@@ -34,10 +34,12 @@ func present(o Options, run outcome, findings []reconcile.Finding) int {
 				blocked++
 			}
 			fmt.Fprintf(w, "%-8s %s%s\n", strings.ToUpper(string(r.Outcome)), r.Key, elapsed(r))
-			if r.Outcome == check.Fail {
+			// A passing check's output is its log, shown as a failing
+			// check's is.
+			if r.Outcome != check.Blocked {
 				printOutput(w, r.Output)
 				if github {
-					annotate(w, r.Key.String(), r.Output)
+					annotate(w, r.Key.String(), r.Output, r.Outcome == check.Fail)
 				}
 			}
 		}
@@ -146,9 +148,10 @@ func printOutput(w io.Writer, out string) {
 	}
 }
 
-// annotate turns path:line findings into GitHub warnings, and always adds one
-// summary warning so output without locations still surfaces.
-func annotate(w io.Writer, key, out string) {
+// annotate turns path:line findings into GitHub warnings; for a failed
+// check it adds one summary warning so output without locations still
+// surfaces.
+func annotate(w io.Writer, key, out string, failed bool) {
 	title := escapeProp("ytif " + key)
 	for _, line := range strings.Split(out, "\n") {
 		m := findingLine.FindStringSubmatch(strings.TrimRight(line, "\r"))
@@ -161,7 +164,9 @@ func annotate(w io.Writer, key, out string) {
 		}
 		fmt.Fprintf(w, "::warning %s,title=%s::%s\n", props, title, escapeData(m[4]))
 	}
-	fmt.Fprintf(w, "::warning title=%s::check failed\n", title)
+	if failed {
+		fmt.Fprintf(w, "::warning title=%s::check failed\n", title)
+	}
 }
 
 var (
