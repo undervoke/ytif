@@ -117,3 +117,12 @@ checks:
     detection: Renders a keyed dispatch failure and checks that the embedded check data retains the blocked outcome, diagnostic, and commit.
     impact: A known execution blocker appears as an unexplained absence of records.
     delete_when: The gate no longer emits keyed dispatch diagnostics for selected checks.
+  - runner: go-test
+    unit: internal/gitx
+    name: TestRootFromRealHook
+    placement: commit
+    tags: [fault, mistake, misdirection, silent, manual]
+    accident: A hook-inherited GIT_DIR reaches root discovery after the adapter moves into a nested module directory, so git treats the nested directory as the work tree.
+    detection: Installs a real pre-commit hook in a linked-worktree fixture with a nested tool module and fires it with a commit, requiring the hook-spawned probe to report the worktree root with the staged file visible, plus relative-GIT_DIR, explicit-GIT_WORK_TREE, and alternate-index subcases.
+    impact: Commit and push gates resolve the repository to the nested tool module, so staged-file selection and inventory load run against the wrong tree and the gate fails or checks the wrong files.
+    delete_when: gitx.Root no longer resolves the repository root.
