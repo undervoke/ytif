@@ -10,15 +10,18 @@ that run project code around the rail fail the gate.
 
 ## Install
 
-Download a release archive and verify it against `SHA256SUMS`, or, with
-Go 1.25 or later:
+Pin ytif per project, so hooks, CI, and every clone run the version the
+project's files were written for. In a Go module (Go 1.24 or later):
 
 ```sh
-go install github.com/undervoke/ytif/cmd/ytif@latest
+go get -tool github.com/undervoke/ytif/cmd/ytif@v0.1.0
 ```
 
-Git hooks and CI need `ytif` on `PATH`, along with the test runners the
-project uses.
+`go.mod` and `go.sum` then hold the version, and `go tool ytif` runs it;
+read every `ytif` below as `go tool ytif`. Elsewhere, download a release
+archive and verify it against `SHA256SUMS`, or run
+`go run github.com/undervoke/ytif/cmd/ytif@v0.1.0`. The gates also need
+the test runners the project uses.
 
 To adopt it, stage any new check files and run `ytif list`. Every
 discovered check without a contract and every gate step that bypasses the
@@ -55,25 +58,49 @@ whatever the placement, and .NET discovery builds the test projects.
 
 ## The inventory
 
-`verification-inventory.yaml` holds one contract per discovered check:
+`ytif-inventory.yaml` holds one contract per discovered check:
 
 ```yaml
-version: 1
+version: 2
+vocabulary:                    # the project's own tag groups
+  where:
+    release: Release
+    install: { en: Install, ko: 설치 }
 checks:
   - runner: go-verify
     unit: internal/release
     name: VerifyChangelog
     placement: commit          # commit, push, or ci
+    tags: [user, mistake, misdirection, release, silent, manual]
+    requires:                  # optional: checks this one depends on
+      - { runner: go-test, unit: internal/release, name: TestVersionBump }
     accident: A release bumps the version without a changelog entry.
-    outcome: The release ships notes that do not describe it.
+    impact: The release ships notes that do not describe it.
     delete_when: Release notes are generated from commits.
 ```
 
-`accident` is an ordinary, unintended change the check catches, `outcome`
-the wrong behavior that change would otherwise ship, and `delete_when` an
-observable condition for removing the check; all three are required. You
-choose the placement: an earlier gate for a check worth its cost there,
-as `ytif stats` shows.
+`accident` is an ordinary, unintended change the check catches, `impact`
+what users see when that change ships, and `delete_when` an observable
+condition for removing the check; all three are required. You choose the
+placement: an earlier gate for a check worth its cost there, as
+`ytif stats` shows.
+
+Tags describe the accident. ytif ships these groups; every check carries
+exactly one `visibility` and one `recovery` tag, and any number of the rest:
+
+| Group | Tags |
+|---|---|
+| `what` (harm) | `code-execution`, `permission-bypass`, `exposure`, `data-loss`, `misdirection`, `outage` |
+| `who` (from whom) | `user`, `agent`, `attacker`, `fault` |
+| `why` (behavior prevented) | `habit`, `mistake`, `attack` |
+| `visibility` | `silent`, `visible` |
+| `recovery` | `irreversible`, `manual` |
+
+`vocabulary` declares further groups; a label is one text or one per
+language (`en`, `ko`), and a tag name may appear in one group only.
+`requires` and `ensures` name other inventoried checks this one depends on
+or keeps working. An unknown tag, a missing `visibility` or `recovery` tag,
+and a relation to a check outside the inventory are findings.
 
 ## Gates
 
@@ -90,10 +117,10 @@ a filter on tests.
 # lefthook.yml
 pre-commit:
   jobs:
-    - run: ytif commit
+    - run: go tool ytif commit
 pre-push:
   jobs:
-    - run: ytif push
+    - run: go tool ytif push
       use_stdin: true
 ```
 
@@ -104,9 +131,8 @@ steps:
   - uses: actions/checkout@v7
   - uses: actions/setup-go@v7
     with:
-      go-version: stable
-  - run: go install github.com/undervoke/ytif/cmd/ytif@latest
-  - run: ytif ci --report github --records ytif-records.jsonl
+      go-version-file: go.mod
+  - run: go tool ytif ci --report github --records ytif-records.jsonl
   - if: always()
     uses: actions/upload-artifact@v7
     with:
@@ -115,16 +141,17 @@ steps:
       if-no-files-found: ignore
 ```
 
-Its actions and the `go install` step need routing entries. Annotations do
-not keep records; read a downloaded artifact with `ytif stats --records PATH`.
+Its actions need routing entries. Annotations do not keep records; read a
+downloaded artifact with `ytif stats --records PATH`.
 
-Every command in lefthook and GitHub workflows must call `ytif` or be
-external code listed in `verification-routing.yaml`. A `run` entry matches
+Every command in lefthook and GitHub workflows must call `ytif` (directly,
+through `go tool ytif`, or through `go run` of its package) or be external
+code listed in `ytif-routing.yaml`. A `run` entry matches
 a step's whole text, and a `uses` entry the action's `owner/repo` without
 its ref. Project code cannot be routed; it runs through `ytif`.
 
 ```yaml
-version: 1
+version: 2
 entries:
   - surface: github-actions
     uses: actions/checkout
@@ -135,7 +162,17 @@ entries:
 ```
 
 `ytif list` shows checks and findings; `ytif stats` shows recorded time and
-failures. `ytif ci --report github` emits annotations. Exit codes: `0` pass,
+hits, where a hit is a run of consecutive fails that a pass ends.
+`ytif ci --report github` emits annotations.
+
+## Board
+
+`ytif board` writes the inventory and its records as one static HTML file,
+`<git-common-dir>/ytif/board.html`, and opens it; `--out PATH` only writes
+it, and `--records PATH` reads other record files, such as a CI artifact.
+Its pages list and filter checks by tag, draw a check's relations and
+nearest checks, show each check's cost and hits, and lay out the
+vocabulary, in English or Korean. Exit codes: `0` pass,
 `1` fail, `2` usage or configuration error.
 
 ## Agent guard
@@ -149,7 +186,7 @@ runners or ytif gates. For Claude Code (`.claude/settings.json`) and Codex
 {
   "hooks": {
     "PreToolUse": [
-      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "ytif guard" }] }
+      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "go tool ytif guard" }] }
     ]
   }
 }
@@ -157,7 +194,7 @@ runners or ytif gates. For Claude Code (`.claude/settings.json`) and Codex
 
 For OpenCode, copy `integrations/opencode/ytif-guard.ts` into
 `.opencode/plugins/`; for Pi, `integrations/pi/ytif-guard.ts` into
-`.pi/extensions/`.
+`.pi/extensions/`, and set its `YTIF` command to how the project runs ytif.
 
 Only the user grants an exception: `ytif allow 8h` lets agents run them
 directly for unattended work, and `ytif allow --off` ends it. A test runner

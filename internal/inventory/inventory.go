@@ -20,26 +20,44 @@ import (
 )
 
 const (
-	InventoryFile = "verification-inventory.yaml"
-	RoutingFile   = "verification-routing.yaml"
-	version       = 1
+	InventoryFile = "ytif-inventory.yaml"
+	RoutingFile   = "ytif-routing.yaml"
+	version       = 2
 )
 
 // Inventory is the contract ledger.
 type Inventory struct {
-	Version int     `yaml:"version"`
-	Checks  []Entry `yaml:"checks"`
+	Version    int        `yaml:"version"`
+	Vocabulary Vocabulary `yaml:"vocabulary,omitempty"`
+	Checks     []Entry    `yaml:"checks"`
 }
 
-// Entry is one check's contract and placement.
+// Entry is one check's contract and placement. Tags describe the accident
+// in the built-in and project vocabularies; Requires and Ensures name other
+// inventoried checks this one directly depends on or keeps working.
 type Entry struct {
-	Runner     string `yaml:"runner"`
-	Unit       string `yaml:"unit"`
-	Name       string `yaml:"name"`
-	Placement  string `yaml:"placement"`
-	Accident   string `yaml:"accident"`
-	Outcome    string `yaml:"outcome"`
-	DeleteWhen string `yaml:"delete_when"`
+	Runner     string   `yaml:"runner"`
+	Unit       string   `yaml:"unit"`
+	Name       string   `yaml:"name"`
+	Placement  string   `yaml:"placement"`
+	Tags       []string `yaml:"tags,omitempty"`
+	Requires   []Ref    `yaml:"requires,omitempty"`
+	Ensures    []Ref    `yaml:"ensures,omitempty"`
+	Accident   string   `yaml:"accident"`
+	Impact     string   `yaml:"impact"`
+	DeleteWhen string   `yaml:"delete_when"`
+}
+
+// Ref names another inventoried check.
+type Ref struct {
+	Runner string `yaml:"runner"`
+	Unit   string `yaml:"unit"`
+	Name   string `yaml:"name"`
+}
+
+// Key returns the referenced check key.
+func (r Ref) Key() check.Key {
+	return check.Key{Runner: r.Runner, Unit: r.Unit, Name: r.Name}
 }
 
 // Key returns the entry's check key.
@@ -52,7 +70,7 @@ func (e Entry) MissingContract() []string {
 	var missing []string
 	for _, f := range []struct{ name, value string }{
 		{"accident", e.Accident},
-		{"outcome", e.Outcome},
+		{"impact", e.Impact},
 		{"delete_when", e.DeleteWhen},
 	} {
 		if strings.TrimSpace(f.value) == "" {
@@ -94,6 +112,9 @@ func LoadInventory(root string) (Inventory, error) {
 	}
 	if inv.Version != version {
 		return Inventory{}, fmt.Errorf("%s: version %d, want %d", InventoryFile, inv.Version, version)
+	}
+	if err := inv.Vocabulary.validate(); err != nil {
+		return Inventory{}, fmt.Errorf("%s: vocabulary: %w", InventoryFile, err)
 	}
 	return inv, nil
 }

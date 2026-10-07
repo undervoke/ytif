@@ -8,10 +8,12 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/undervoke/ytif/internal/allow"
+	"github.com/undervoke/ytif/internal/board"
 	"github.com/undervoke/ytif/internal/check"
 	"github.com/undervoke/ytif/internal/gate"
 	"github.com/undervoke/ytif/internal/gitx"
@@ -28,7 +30,8 @@ gates:
 
 other:
   list                   show managed checks and reconciliation findings
-  stats                  show recent elapsed time and failures per check
+  stats                  show recent elapsed time and hits per check
+  board [--out PATH]     write the inventory board as one HTML file and open it
   guard                  agent PreToolUse hook: refuse agent test runs
   allow [DURATION|--off] let agents run checks themselves for DURATION
   version                print the version
@@ -55,6 +58,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, version strin
 		return runList(ctx, rest, stdout, stderr)
 	case "stats":
 		return runStats(rest, stdout, stderr)
+	case "board":
+		return runBoard(rest, stdout, stderr)
 	case "guard":
 		guard.Run(stdin, stdout, stderr)
 		return gate.ExitPass
@@ -137,9 +142,9 @@ func runStats(args []string, stdout, stderr io.Writer) int {
 	}
 	checks, invs, guards := record.Stats(lines, record.Filter{Gate: *gateName, Context: *ctxName}, *last)
 	avgHead := fmt.Sprintf("AVG(last %d)", *last)
-	fmt.Fprintf(stdout, "%-6s %-6s %-12s %-7s %-7s %s\n", "RUNS", "FAILS", avgHead, "GATE", "CONTEXT", "CHECK")
+	fmt.Fprintf(stdout, "%-6s %-6s %-12s %-7s %-7s %s\n", "RUNS", "HITS", avgHead, "GATE", "CONTEXT", "CHECK")
 	for _, c := range checks {
-		fmt.Fprintf(stdout, "%-6d %-6d %-12s %-7s %-7s %s\n", c.Runs, c.Fails, avg(c.AvgMS), c.Gate, c.Context, c.Key)
+		fmt.Fprintf(stdout, "%-6d %-6d %-12s %-7s %-7s %s\n", c.Runs, c.Hits, avg(c.AvgMS), c.Gate, c.Context, c.Key)
 	}
 	if len(invs) > 0 {
 		fmt.Fprintf(stdout, "\n%-6s %-12s %-7s %-7s %s\n", "RUNS", avgHead, "GATE", "CONTEXT", "INVOCATION")
@@ -156,6 +161,61 @@ func runStats(args []string, stdout, stderr io.Writer) int {
 	}
 	if malformed > 0 {
 		fmt.Fprintf(stderr, "ytif: skipped %d malformed record lines\n", malformed)
+	}
+	return gate.ExitPass
+}
+
+func runBoard(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("board", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	out := fs.String("out", "", "write the board to PATH and do not open it")
+	var paths multiFlag
+	fs.Var(&paths, "records", "record file to read (repeatable); default: local records")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+		return usageError(stderr, fs, "takes no arguments")
+	}
+	root, code := repoRoot(stderr)
+	if code != 0 {
+		return code
+	}
+	common, err := gitx.CommonDir(root)
+	if err != nil {
+		fmt.Fprintf(stderr, "ytif: %v\n", err)
+		return gate.ExitUsage
+	}
+	if len(paths) == 0 {
+		paths = multiFlag{record.DefaultPath(common)}
+	}
+	lines, malformed, err := record.Read(paths)
+	if err != nil {
+		fmt.Fprintf(stderr, "ytif: %v\n", err)
+		return gate.ExitUsage
+	}
+	if malformed > 0 {
+		fmt.Fprintf(stderr, "ytif: skipped %d malformed record lines\n", malformed)
+	}
+	html, err := board.Render(root, lines, time.Now())
+	if err != nil {
+		fmt.Fprintf(stderr, "ytif: %v\n", err)
+		return gate.ExitUsage
+	}
+	path := *out
+	if path == "" {
+		path = board.DefaultPath(common)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		fmt.Fprintf(stderr, "ytif: %v\n", err)
+		return gate.ExitUsage
+	}
+	if err := os.WriteFile(path, html, 0o644); err != nil {
+		fmt.Fprintf(stderr, "ytif: %v\n", err)
+		return gate.ExitUsage
+	}
+	fmt.Fprintln(stdout, path)
+	if *out == "" {
+		if err := board.Open(path); err != nil {
+			fmt.Fprintf(stderr, "ytif: open the board yourself: %v\n", err)
+		}
 	}
 	return gate.ExitPass
 }

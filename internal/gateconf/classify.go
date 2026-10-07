@@ -454,7 +454,8 @@ func nodeTestFlag(cmd shellcmd.Command) bool {
 	return false
 }
 
-// goCommand classifies go subcommands; go run of the rail is the rail.
+// goCommand classifies go subcommands; go run of the rail and go tool ytif
+// are the rail.
 func (c *classifier) goCommand(cmd shellcmd.Command) (class, string) {
 	i, ok := goSubcommand(cmd)
 	if i >= len(cmd.Args) {
@@ -468,6 +469,11 @@ func (c *classifier) goCommand(cmd shellcmd.Command) (class, string) {
 		return neutral, "" // reads configuration, e.g. to locate ytif
 	case "generate":
 		return repoCode, "runs repository go:generate directives"
+	case "tool":
+		if j, ok := goToolName(cmd.Args[i+1:], cmd.Literal[i+1:]); ok && isYtifTool(cmd.Args[i+1+j]) {
+			return rail, ""
+		}
+		return external, ""
 	case "run":
 	default:
 		return external, ""
@@ -518,15 +524,46 @@ func goRunPackage(args []string, lits []bool) (int, bool) {
 	return 0, false
 }
 
+// goToolName returns the index of the tool go tool runs, after go tool's
+// own flags.
+func goToolName(args []string, lits []bool) (int, bool) {
+	for i, a := range args {
+		if !lits[i] {
+			return 0, false
+		}
+		if !strings.HasPrefix(a, "-") {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// isYtifTool reports whether go tool's argument names ytif, by its short
+// name or its package path.
+func isYtifTool(name string) bool {
+	return name == "ytif" || strings.HasSuffix(name, "/cmd/ytif")
+}
+
 // RailCommand returns the ytif command cmd starts, through the ytif
-// executable or go run of its main package, or "".
+// executable, go tool ytif, or go run of its main package, or "".
 func RailCommand(cmd shellcmd.Command) string {
 	next := 1
 	switch cmd.NameBase() {
 	case "ytif":
 	case "go":
 		i, ok := goSubcommand(cmd)
-		if !ok || i >= len(cmd.Args) || cmd.Args[i] != "run" {
+		if !ok || i >= len(cmd.Args) {
+			return ""
+		}
+		if cmd.Args[i] == "tool" {
+			j, ok := goToolName(cmd.Args[i+1:], cmd.Literal[i+1:])
+			if !ok || !isYtifTool(cmd.Args[i+1+j]) {
+				return ""
+			}
+			next = i + 2 + j
+			break
+		}
+		if cmd.Args[i] != "run" {
 			return ""
 		}
 		j, ok := goRunPackage(cmd.Args[i+1:], cmd.Literal[i+1:])

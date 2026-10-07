@@ -3,6 +3,12 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 
 // Routes Pi bash calls through `ytif guard`, so the refusal rule lives only
 // in ytif. Copy this file into .pi/extensions/ of a trusted project.
+
+// YTIF starts ytif. A project that pins ytif as a Go tool uses
+// ["go", "tool", "ytif"]; the guard runs in the session directory, inside
+// the module.
+const YTIF = ["ytif"]
+
 export default function (pi: ExtensionAPI) {
   pi.on("tool_call", async (event, ctx) => {
     if (event.toolName !== "bash") return undefined
@@ -18,7 +24,7 @@ export default function (pi: ExtensionAPI) {
 // did not run or reported an error. A guard that did not run allows the
 // command, as a missing hook command does in other hosts.
 function guard(command: string, cwd: string): { reason?: string; problem?: string } {
-  const result = spawnSync("ytif", ["guard"], {
+  const result = spawnSync(YTIF[0], [...YTIF.slice(1), "guard"], {
     cwd,
     input: JSON.stringify({ cwd, tool_input: { command } }),
     encoding: "utf8",

@@ -18,6 +18,9 @@ const (
 	Unregistered     Kind = "unregistered"      // discovered, absent from the inventory
 	Stale            Kind = "stale"             // in the inventory, absent from a complete discovery
 	MissingContract  Kind = "missing-contract"  // inventoried without required assessments
+	UnknownTag       Kind = "unknown-tag"       // a tag no vocabulary declares
+	TagCount         Kind = "tag-count"         // an exactly-one group tagged zero or several times
+	DanglingRelation Kind = "dangling-relation" // requires or ensures names a check the inventory lacks
 	Duplicate        Kind = "duplicate"         // one key listed or discovered twice
 	InvalidPlacement Kind = "invalid-placement" // placement is not commit, push, or ci
 	PlacementOrder   Kind = "placement-order"   // a check runs another that is placed later
@@ -82,6 +85,15 @@ func Reconcile(inv inventory.Inventory, known map[string]bool, discovered map[st
 		}
 	}
 
+	inventoried := map[check.Key]bool{}
+	for _, e := range inv.Checks {
+		inventoried[e.Key()] = true
+	}
+	groups := inv.TagGroups()
+	for _, e := range inv.Checks {
+		res.Findings = append(res.Findings, entryFindings(e, groups, inventoried)...)
+	}
+
 	listed := map[check.Key]bool{}
 	for _, e := range inv.Checks {
 		k := e.Key()
@@ -120,6 +132,30 @@ func Reconcile(inv inventory.Inventory, known map[string]bool, discovered map[st
 	Sort(res.Findings)
 	sort.Slice(res.Managed, func(i, j int) bool { return res.Managed[i].Key().Less(res.Managed[j].Key()) })
 	return res
+}
+
+// entryFindings reports an entry's tag and relation defects.
+func entryFindings(e inventory.Entry, groups map[string]inventory.Group, inventoried map[check.Key]bool) []Finding {
+	var fs []Finding
+	k := e.Key()
+	unknown, counts := e.TagProblems(groups)
+	if len(unknown) > 0 {
+		fs = append(fs, Finding{Kind: UnknownTag, Key: k, Detail: strings.Join(unknown, ", ")})
+	}
+	for _, c := range counts {
+		fs = append(fs, Finding{Kind: TagCount, Key: k, Detail: c})
+	}
+	for _, rel := range []struct {
+		name string
+		refs []inventory.Ref
+	}{{"requires", e.Requires}, {"ensures", e.Ensures}} {
+		for _, r := range rel.refs {
+			if !inventoried[r.Key()] {
+				fs = append(fs, Finding{Kind: DanglingRelation, Key: k, Detail: rel.name + " " + r.Key().String()})
+			}
+		}
+	}
+	return fs
 }
 
 // split reports each cause of a joined error as its own finding.

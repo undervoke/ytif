@@ -4,6 +4,12 @@ import type { Plugin } from "@opencode-ai/plugin"
 
 // Routes OpenCode bash calls through `ytif guard`, so the refusal rule lives
 // only in ytif. Copy this file into .opencode/plugins/.
+
+// YTIF starts ytif. A project that pins ytif as a Go tool uses
+// ["go", "tool", "ytif"]; the guard then runs in the session directory,
+// inside the module.
+const YTIF = ["ytif"]
+
 export const YtifGuard: Plugin = async ({ client, directory }) => ({
   "tool.execute.before": async (input, output) => {
     if (input.tool !== "bash") return
@@ -12,7 +18,7 @@ export const YtifGuard: Plugin = async ({ client, directory }) => ({
     if (typeof command !== "string") return
     // The bash tool runs in its workdir, resolved against the session directory.
     const cwd = typeof args.workdir === "string" ? resolve(directory, args.workdir) : directory
-    const { reason, problem } = guard(command, cwd)
+    const { reason, problem } = guard(command, cwd, directory)
     if (problem) {
       await client.tui.showToast({ body: { title: "YTiF", message: problem, variant: "warning" } }).catch(() => {})
     }
@@ -23,9 +29,9 @@ export const YtifGuard: Plugin = async ({ client, directory }) => ({
 // guard returns the refusal reason, if any, and a problem when the guard
 // did not run or reported an error. A guard that did not run allows the
 // command, as a missing hook command does in other hosts.
-function guard(command: string, cwd: string): { reason?: string; problem?: string } {
-  const result = spawnSync("ytif", ["guard"], {
-    cwd,
+function guard(command: string, cwd: string, directory: string): { reason?: string; problem?: string } {
+  const result = spawnSync(YTIF[0], [...YTIF.slice(1), "guard"], {
+    cwd: directory,
     input: JSON.stringify({ cwd, tool_input: { command } }),
     encoding: "utf8",
   })

@@ -19,14 +19,15 @@ type Group struct {
 	Context string
 }
 
-// CheckStat summarizes one check in one gate and context. Fails counts every
-// fail outcome; each one is a hit. AvgMS averages the timed outcomes among
+// CheckStat summarizes one check in one gate and context. Hits counts runs of
+// consecutive fail outcomes that a pass ends; blocked outcomes neither start
+// nor end one. AvgMS averages the timed outcomes among
 // the last N, and is nil when none of them carries elapsed time.
 type CheckStat struct {
 	Group
 	Key   string
 	Runs  int
-	Fails int
+	Hits  int
 	Timed int // timed outcomes inside the window
 	AvgMS *float64
 }
@@ -92,9 +93,16 @@ func Stats(lines []Line, f Filter, n int) ([]CheckStat, []InvocationStat, []Guar
 	var cs []CheckStat
 	for id, ls := range checks {
 		s := CheckStat{Group: id.Group, Key: id.key, Runs: len(ls)}
+		failing := false
 		for _, l := range ls {
-			if l.Outcome == "fail" {
-				s.Fails++
+			switch l.Outcome {
+			case "fail":
+				if !failing {
+					s.Hits++
+				}
+				failing = true
+			case "pass":
+				failing = false
 			}
 		}
 		s.Timed, s.AvgMS = average(window(ls, n))
