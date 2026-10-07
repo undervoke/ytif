@@ -1,2 +1,101 @@
 version: 2
-checks: []
+checks:
+  - runner: go-test
+    unit: internal/execution
+    name: TestExecutionLoad
+    placement: commit
+    tags: [user, mistake, misdirection, visible, manual]
+    accident: An edit to ytif-execution.yaml leaves the adapter command empty, a runner duplicated, or a profile undocumented.
+    detection: Decodes one valid execution list and a table of malformed lists, failing unless the valid one loads and each malformed one errors naming ytif-execution.yaml.
+    impact: Gates refuse to start, or profiles run selections no description explains.
+    delete_when: execution.Load no longer reads ytif-execution.yaml.
+  - runner: go-test
+    unit: internal/adapter
+    name: TestAdapterProtocol
+    placement: commit
+    tags: [fault, mistake, misdirection, silent, manual]
+    accident: The adapter reports a failure the rail records as a pass, drops a skip, or rejects a key the profile may report.
+    detection: Drives the adapter source against a fake adapter subprocess with valid and violating replies, failing unless outcomes map exactly and every violation errors.
+    impact: Gates pass checks that failed and refuse checks that passed.
+    delete_when: The adapter no longer speaks the stdin-JSON protocol.
+  - runner: go-test
+    unit: internal/gate
+    name: TestProfileGate
+    placement: commit
+    tags: [fault, mistake, misdirection, silent, manual]
+    accident: A profile gate accepts a selection its inventory forbids, drops an adapter failure, or starts native discovery it promised to skip.
+    detection: Runs profile gates in isolated git fixtures with canned adapter replies, failing unless exits, console lines, and record lines match.
+    impact: A hook reports pass while forbidden or failed checks never ran.
+    delete_when: Gates no longer run execution profiles.
+  - runner: go-test
+    unit: internal/gate
+    name: TestListMachine
+    placement: commit
+    tags: [fault, mistake, misdirection, visible, manual]
+    accident: list --json omits a contract field, or --runners leaks excluded runners into reconciliation.
+    detection: Lists a git fixture as JSON and with a runner scope, failing unless contracts, counts, and findings match exactly.
+    impact: Boards and adapters work from incomplete check data, or scoped lists fail on unrelated SDKs.
+    delete_when: list no longer offers --json or --runners.
+  - runner: go-test
+    unit: internal/board
+    name: TestRenderLatestOutcomeAndProvenance
+    placement: commit
+    tags: [mistake, misdirection, silent, manual]
+    accident: A record aggregation refactor chooses the first result or drops its commit, worktree, or profile while building board data.
+    detection: Renders HTML from ordered pass/fail and historical skip records, decodes the embedded data, and checks latest time, outcome, provenance, counters, and an unrecorded check.
+    impact: The board presents a stale pass or attributes another execution to the selected check.
+    delete_when: The board no longer derives per-check outcomes from execution records.
+  - runner: go-test
+    unit: internal/board
+    name: TestRenderCachedHasNoFreshTiming
+    placement: commit
+    tags: [mistake, misdirection, silent, manual]
+    accident: A board aggregation change counts a cache replay or enclosing process duration as newly measured test execution time.
+    detection: Renders a failed result followed by a cached result and a timed invocation, then checks check timing and the separate invocation table in the embedded data.
+    impact: Displayed test costs include time that was never measured for that test.
+    delete_when: The board stops reporting cached results and per-check timing.
+  - runner: go-test
+    unit: internal/board
+    name: TestRenderNeverInfersPassFromInvocation
+    placement: commit
+    tags: [mistake, misdirection, silent, manual]
+    accident: A board refactor synthesizes test outcomes from a successful enclosing invocation.
+    detection: Renders an invocation with no result lines for the same unit and verifies that its inventoried test still has no statistics.
+    impact: Tests without execution evidence appear to have passed.
+    delete_when: Board input no longer mixes invocation and individual result records.
+  - runner: go-test
+    unit: internal/board
+    name: TestRenderRenameKeepsOrphanHistory
+    placement: commit
+    tags: [mistake, misdirection, silent, manual]
+    accident: A board key refactor groups by unit alone or attaches a renamed test's history to another current test.
+    detection: Renders old-key pass/fail history beside current same-unit pass/blocked results and checks separate current statistics and the orphan's latest provenance.
+    impact: The board assigns another check's failures or successes to the current check.
+    delete_when: The board no longer joins inventory identities with historical execution records.
+  - runner: go-test
+    unit: internal/record
+    name: TestLineProvenanceRoundTrip
+    placement: commit
+    tags: [mistake, misdirection, silent, manual]
+    accident: Renaming a record field or its JSON tag drops provenance from serialized result lines.
+    detection: Marshals and decodes a result line containing commit, worktree, and profile, checks the wire names and values, and decodes a historical line without those fields.
+    impact: Persisted records lose the information required to distinguish execution sources.
+    delete_when: JSON result lines no longer transport execution provenance.
+  - runner: go-test
+    unit: internal/record
+    name: TestStatsOutcomeSemantics
+    placement: commit
+    tags: [mistake, misdirection, silent, manual]
+    accident: A statistics refactor treats skips or blocked executions as successful recovery or counts cached results as fresh timings.
+    detection: Runs Stats over interleaved fail, pass, blocked, skip, and cached sequences and checks hit groups, run counts, and timed averages.
+    impact: Hit counts and reported costs misstate the checks' observed history.
+    delete_when: Statistics stop deriving hits and timing from result-line sequences.
+  - runner: go-test
+    unit: internal/board
+    name: TestRenderDispatchDiagnostic
+    placement: commit
+    tags: [mistake, misdirection, silent, manual]
+    accident: A board aggregation refactor ignores keyed dispatch records from a missing runner or a failed preflight.
+    detection: Renders a keyed dispatch failure and checks that the embedded check data retains the blocked outcome, diagnostic, and commit.
+    impact: A known execution blocker appears as an unexplained absence of records.
+    delete_when: The gate no longer emits keyed dispatch diagnostics for selected checks.

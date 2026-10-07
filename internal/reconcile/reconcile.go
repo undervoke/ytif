@@ -134,6 +134,38 @@ func Reconcile(inv inventory.Inventory, known map[string]bool, discovered map[st
 	return res
 }
 
+// SelectedFindings reconciles only selected keys against the inventory:
+// a selected check the inventory lacks, an invalid placement, a missing
+// contract, and tag or relation defects of the selected entries. Profile
+// gates use it instead of a full reconciliation, which would drag in
+// runners the profile never discovers.
+func SelectedFindings(inv inventory.Inventory, selected []check.Key) []Finding {
+	inventoried := map[check.Key]bool{}
+	byKey := map[check.Key]inventory.Entry{}
+	for _, e := range inv.Checks {
+		inventoried[e.Key()] = true
+		byKey[e.Key()] = e
+	}
+	groups := inv.TagGroups()
+	var fs []Finding
+	for _, k := range selected {
+		e, ok := byKey[k]
+		if !ok {
+			fs = append(fs, Finding{Kind: Unregistered, Key: k})
+			continue
+		}
+		if check.Rank(e.Placement) == 0 {
+			fs = append(fs, Finding{Kind: InvalidPlacement, Key: k, Detail: fmt.Sprintf("%q is not commit, push, or ci", e.Placement)})
+		}
+		if missing := e.MissingContract(); len(missing) > 0 {
+			fs = append(fs, Finding{Kind: MissingContract, Key: k, Detail: "empty " + strings.Join(missing, ", ")})
+		}
+		fs = append(fs, entryFindings(e, groups, inventoried)...)
+	}
+	Sort(fs)
+	return fs
+}
+
 // entryFindings reports an entry's tag and relation defects.
 func entryFindings(e inventory.Entry, groups map[string]inventory.Group, inventoried map[check.Key]bool) []Finding {
 	var fs []Finding

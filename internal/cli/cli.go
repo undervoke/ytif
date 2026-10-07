@@ -39,6 +39,12 @@ other:
 gate flags:
   --report github        emit GitHub Actions annotations
   --records PATH         append records to PATH instead of the git common dir
+  --profile NAME         run the ytif-execution.yaml profile instead of native sources
+
+list flags:
+  --summary              print only counts
+  --json                 print managed checks and findings as JSON
+  --runners A,B          discover only these runners
 `
 
 // Run executes one command and returns its exit code.
@@ -77,7 +83,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, version strin
 }
 
 func runGate(ctx context.Context, name string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	fs, report, records := gateFlags(name, stderr)
+	fs, report, records, profile := gateFlags(name, stderr)
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return usageError(stderr, fs, "takes no arguments")
 	}
@@ -88,13 +94,18 @@ func runGate(ctx context.Context, name string, args []string, stdin io.Reader, s
 	if code != 0 {
 		return code
 	}
+	srcs, err := sources(root)
+	if err != nil {
+		fmt.Fprintf(stderr, "ytif: %v\n", err)
+		return gate.ExitUsage
+	}
 	var refs io.Reader
 	if name == check.GatePush && pipedStdin(stdin) {
 		refs = stdin
 	}
 	return gate.Run(ctx, root, gate.Options{
-		Gate: name, Report: *report, Records: *records, Stdin: refs,
-		Stdout: stdout, Stderr: stderr, Sources: sources(), Config: configChecker(),
+		Gate: name, Report: *report, Records: *records, Profile: *profile, Stdin: refs,
+		Stdout: stdout, Stderr: stderr, Sources: srcs, Config: configChecker(),
 	})
 }
 
@@ -102,6 +113,8 @@ func runList(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	summary := fs.Bool("summary", false, "print only counts")
+	jsonOut := fs.Bool("json", false, "print managed checks and findings as JSON")
+	runners := fs.String("runners", "", "discover only these comma-separated runners")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return usageError(stderr, fs, "takes no arguments")
 	}
@@ -109,7 +122,36 @@ func runList(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if code != 0 {
 		return code
 	}
-	return gate.List(ctx, root, sources(), configChecker(), stdout, stderr, *summary)
+	srcs, err := sources(root)
+	if err != nil {
+		fmt.Fprintf(stderr, "ytif: %v\n", err)
+		return gate.ExitUsage
+	}
+	var only []string
+	if *runners != "" {
+		known := map[string]bool{}
+		for _, src := range srcs {
+			for _, r := range src.Runners() {
+				known[r] = true
+			}
+		}
+		for _, r := range strings.Split(*runners, ",") {
+			r = strings.TrimSpace(r)
+			if r == "" {
+				continue
+			}
+			if !known[r] {
+				return usageError(stderr, fs, fmt.Sprintf("--runners %q: unknown runner (want %s)", r, strings.Join(sortedKeys(known), ", ")))
+			}
+			only = append(only, r)
+		}
+		if len(only) == 0 {
+			return usageError(stderr, fs, "--runners names no runner")
+		}
+	}
+	return gate.List(ctx, root, srcs, configChecker(), stdout, stderr, gate.ListOptions{
+		Summary: *summary, JSON: *jsonOut, Runners: only,
+	})
 }
 
 func runStats(args []string, stdout, stderr io.Writer) int {
@@ -259,12 +301,13 @@ func runAllow(args []string, stdout, stderr io.Writer) int {
 	return gate.ExitPass
 }
 
-func gateFlags(name string, stderr io.Writer) (*flag.FlagSet, *string, *string) {
+func gateFlags(name string, stderr io.Writer) (*flag.FlagSet, *string, *string, *string) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	report := fs.String("report", "", "annotation format: github")
 	records := fs.String("records", "", "append records to this file")
-	return fs, report, records
+	profile := fs.String("profile", "", "run the execution adapter's profile")
+	return fs, report, records, profile
 }
 
 func repoRoot(stderr io.Writer) (string, int) {

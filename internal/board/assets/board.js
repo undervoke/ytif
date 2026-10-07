@@ -19,6 +19,8 @@ const T = {
     more: (k, r) => `${k} more · ${r} left`, noMatch: "No check matches.",
     searchCheck: "Find a check: impact, test name, unit", matchCount: (m, n) => `${m} of ${n} match`, firstShown: l => ` · first ${l} shown`,
     recent: "Recent", checkedAt: p => `checked at ${p}`, accident: "Accident", detection: "Detection", deleteWhen: "Delete when", location: "Location",
+    latest: "Latest result", prov: "Provenance", neverRan: "never ran · no records",
+    lastRun: (o, tm) => `last ${o} · ${tm}`, provUnknown: "unknown provenance (historical record)",
     relations: "Direct relations", requires: "Requires", ensures: "Ensures", requiredBy: "Required by", ensuredBy: "Ensured by",
     closest: "Closest checks", byScore: "by score", tags: "Tags", component: "Component", unit: "unit",
     show: n => `Show · ${n} sharing`, hide: "Hide", moreLeft: (k, r) => `${k} more (${r} left)`, noPeers: "No other check shares this.",
@@ -47,6 +49,8 @@ const T = {
     more: (k, r) => `${k}개 더 보기 · ${r}개 남음`, noMatch: "맞는 검증이 없습니다.",
     searchCheck: "검증 찾기: impact, 테스트 이름, unit", matchCount: (m, n) => `${n}개 중 ${m}개 일치`, firstShown: l => ` · 앞의 ${l}개만 표시`,
     recent: "최근 본 검증", checkedAt: p => `${p} 때 검사`, accident: "사고", detection: "탐지", deleteWhen: "삭제 조건", location: "위치",
+    latest: "최근 결과", prov: "출처", neverRan: "실행 기록 없음",
+    lastRun: (o, tm) => `최근 ${o} · ${tm}`, provUnknown: "출처 불명 (이전 기록)",
     relations: "직접 관계", requires: "선행 조건", ensures: "보장 대상", requiredBy: "이 검증을 필요로 함", ensuredBy: "이 검증을 보장함",
     closest: "가장 가까운 검증", byScore: "점수 순", tags: "태그", component: "컴포넌트", unit: "unit",
     show: n => `펼치기 · 같은 검증 ${n}개`, hide: "접기", moreLeft: (k, r) => `${k}개 더 보기 (${r}개 남음)`, noPeers: "이 값을 가진 다른 검증이 없습니다.",
@@ -87,6 +91,19 @@ const ms = v => {
   return `${s.toLocaleString(lang, { maximumFractionDigits: s < 10 ? 2 : s < 100 ? 1 : 0 })}s`;
 };
 const when = iso => new Intl.DateTimeFormat(lang, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(iso));
+// Latest observed result per check, from record data only: an invocation's
+// success never invents a pass, so a check without result lines reads as
+// never ran. Empty provenance means a historical record predating it.
+const statusText = c => {
+  const s = c.stats;
+  if (!s || !s.last_outcome) return t("neverRan");
+  return t("lastRun", s.last_outcome, when(s.last_time));
+};
+const provText = c => {
+  const s = c.stats;
+  const parts = s ? [s.last_gate, s.last_commit, s.last_worktree, s.last_profile].filter(v => v) : [];
+  return parts.length ? parts.join(" · ") : t("provUnknown");
+};
 const shares = (a, b) => a.some(v => b.includes(v));
 const href = key => "#/check/" + encodeURIComponent(key);
 
@@ -257,7 +274,7 @@ function checksPage(r) {
     $("#summary").innerHTML = `<span>${t("count", fmt(rows.length), fmt(CHECKS.length))}</span>` + on.map(tg => `<span class="chip">${esc(tagText(tg))}</span>`).join("");
     const shown = rows.slice(0, list.shown);
     $("#rows").innerHTML = rows.length ? `<div class="rowhead"><span>${esc(t("colImpact"))}</span><span>${esc(t("colTags"))}</span><span>${esc(t("colGate"))}</span></div>` +
-      shown.map(c => `<a class="row" href="${href(c.key)}"><span class="what"><b>${esc(c.impact)}</b><span class="id">${esc(c.name)} · ${esc(c.unit)}</span></span>${chips(c)}<span class="gate">${esc(c.placement)}</span></a>`).join("") +
+      shown.map(c => `<a class="row" href="${href(c.key)}"><span class="what"><b>${esc(c.impact)}</b><span class="id">${esc(c.name)} · ${esc(c.unit)}</span><span class="id">${esc(statusText(c))}</span></span>${chips(c)}<span class="gate">${esc(c.placement)}</span></a>`).join("") +
       (rows.length > shown.length ? `<div class="morebar"><button type="button" class="btn" id="more">${esc(t("more", fmt(Math.min(50, rows.length - shown.length)), fmt(rows.length - shown.length)))}</button></div>` : "")
       : `<p class="empty">${esc(t(CHECKS.length ? "noMatch" : "noChecks"))}</p>`;
   };
@@ -307,6 +324,11 @@ function diagramPage(r) {
   core.innerHTML = `<span class="eyebrow">${esc(t("checkedAt", c.placement))}</span><p class="out">${esc(c.impact)}</p>${chips(c)}<span class="mono note">${esc(c.name)}</span>`;
   const branch = (k, head, leaves) => `<div class="branch"><div class="bhead" data-wire="core" id="h-${k}">${head}</div><div class="leaves">${leaves.join("")}</div></div>`;
   $("#left").innerHTML = [
+    branch("latest", esc(t("latest")), [
+      `<div class="leaf text" data-wire="h-latest">${esc(statusText(c))}</div>`,
+      ...(c.stats?.last_detail ? [`<div class="leaf text mono" data-wire="h-latest">${esc(c.stats.last_detail)}</div>`] : []),
+      `<div class="leaf kv" data-wire="h-latest"><b>${esc(t("prov"))}</b><span class="mono">${esc(provText(c))}</span></div>`,
+    ]),
     branch("accident", esc(t("accident")), [`<div class="leaf text" data-wire="h-accident">${esc(c.accident)}</div>`]),
     branch("detection", esc(t("detection")), [`<div class="leaf text" data-wire="h-detection">${esc(c.detection)}</div>`]),
     branch("delete", esc(t("deleteWhen")), [`<div class="leaf text" data-wire="h-delete">${esc(c.delete_when)}</div>`]),
@@ -440,7 +462,8 @@ function costPage() {
         const s = c.stats, total = s?.total_ms || 0;
         // one segment per gate, each scaled to the largest total, so length reads as time
         const split = gates.map((g, i) => `<span style="width:${(s?.by_gate[g] || 0) / max * 100}%;background:${gateColor(i)}"></span>`).join("");
-        return `<a class="costrow num" href="${href(c.key)}"><span class="what"><b>${esc(c.impact)}</b><span>${esc(c.name)}</span></span>
+        const status = s ? `${statusText(c)} · ${provText(c)}` : t("neverRan");
+        return `<a class="costrow num" href="${href(c.key)}"><span class="what"><b>${esc(c.impact)}</b><span>${esc(c.name)}</span><span>${esc(status)}</span></span>
           <span class="r">${s ? fmt(s.runs) : "–"}</span><span class="r">${s ? fmt(s.hits) : "–"}</span>
           <span class="total"${s ? ` title="${esc(gates.map(g => `${g} ${ms(s.by_gate[g] || 0)}`).join(" · "))}"` : ""}><span class="bar">${split}</span><em>${s ? ms(total) : "–"}</em></span>
           <span class="r">${s?.timed ? ms(avg(c)) : "–"}</span></a>`;
@@ -452,8 +475,11 @@ function costPage() {
       : `<p class="empty">${esc(t("noRecords"))}</p>`;
     $("#orphans").innerHTML = D.orphans.length ? D.orphans.map(o => {
       const [runner, unit, ...name] = o.key.split(":");
+      let tail = "";
+      if (o.last_outcome) tail = ` · ${esc(t("lastRun", o.last_outcome, when(o.last_time)))}${o.last_gate ? ` · ${esc(o.last_gate)}` : ""}`;
+      if (o.last_fail && o.last_outcome !== "fail") tail += ` · ${esc(t("lastFail", when(o.last_fail), o.last_fail_gate))}`;
       return `<div class="orphan"><span class="mono">${esc(name.join(":"))}</span><span class="mono note">${esc(runner)} · ${esc(unit)}</span>
-        <span class="num">${esc(t("colRuns"))} <b>${fmt(o.runs)}</b> · ${esc(t("colHits"))} <b>${fmt(o.hits)}</b>${o.last_fail ? ` · ${esc(t("lastFail", when(o.last_fail), o.last_fail_gate))}` : ""}</span></div>`;
+        <span class="num">${esc(t("colRuns"))} <b>${fmt(o.runs)}</b> · ${esc(t("colHits"))} <b>${fmt(o.hits)}</b>${tail}</span></div>`;
     }).join("") : `<p class="empty">–</p>`;
   };
   draw();

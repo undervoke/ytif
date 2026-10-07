@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/undervoke/ytif/internal/check"
 	"github.com/undervoke/ytif/internal/inventory"
 	"github.com/undervoke/ytif/internal/record"
 )
@@ -86,6 +85,24 @@ type checkStats struct {
 	TotalMS int64            `json:"total_ms"`
 	Timed   int              `json:"timed"`
 	ByGate  map[string]int64 `json:"by_gate"` // gate → elapsed ms
+	// Outcome counts. Runs is their sum over every known and unknown
+	// outcome; a check with no result lines has no stats at all, which the
+	// board shows as never run rather than passed.
+	Pass    int `json:"pass"`
+	Fail    int `json:"fail"`
+	Blocked int `json:"blocked"`
+	Skip    int `json:"skip"`
+	Cached  int `json:"cached"`
+	// Latest observed result and where it ran. Empty commit, worktree, and
+	// profile mean unknown: a record written before provenance existed,
+	// shown by the board as historical.
+	LastOutcome  string     `json:"last_outcome,omitempty"`
+	LastDetail   string     `json:"last_detail,omitempty"`
+	LastTime     *time.Time `json:"last_time,omitempty"`
+	LastGate     string     `json:"last_gate,omitempty"`
+	LastCommit   string     `json:"last_commit,omitempty"`
+	LastWorktree string     `json:"last_worktree,omitempty"`
+	LastProfile  string     `json:"last_profile,omitempty"`
 }
 
 type checkOut struct {
@@ -116,6 +133,12 @@ type orphanOut struct {
 	Key          string     `json:"key"`
 	Runs         int        `json:"runs"`
 	Hits         int        `json:"hits"`
+	LastOutcome  string     `json:"last_outcome,omitempty"`
+	LastTime     *time.Time `json:"last_time,omitempty"`
+	LastGate     string     `json:"last_gate,omitempty"`
+	LastCommit   string     `json:"last_commit,omitempty"`
+	LastWorktree string     `json:"last_worktree,omitempty"`
+	LastProfile  string     `json:"last_profile,omitempty"`
 	LastFail     *time.Time `json:"last_fail,omitempty"`
 	LastFailGate string     `json:"last_fail_gate,omitempty"`
 }
@@ -197,6 +220,10 @@ func nonNil(s []string) []string {
 
 // aggregate sums result and invocation lines over every gate and context.
 // Hits come from record.Stats, so the board and ytif stats count alike.
+// Per-check stats derive ONLY from KindResult lines: an invocation's success
+// never invents a pass, so a check with no result lines keeps nil stats and
+// the board shows it as never run. Timings cover only lines that carry
+// elapsed_ms; skip and cached outcomes must not carry one.
 func aggregate(lines []record.Line, meta *metaOut) (map[string]*checkStats, []invocationOut, map[string]*orphanOut) {
 	stats := map[string]*checkStats{}
 	orphans := map[string]*orphanOut{}
@@ -209,6 +236,11 @@ func aggregate(lines []record.Line, meta *metaOut) (map[string]*checkStats, []in
 	for _, l := range ordered {
 		switch l.Kind {
 		case record.KindResult, record.KindInvocation:
+		case record.KindDispatch:
+			if l.Key == "" {
+				continue
+			}
+			l.Outcome = record.OutcomeBlocked
 		default:
 			continue
 		}
@@ -242,6 +274,22 @@ func aggregate(lines []record.Line, meta *metaOut) (map[string]*checkStats, []in
 			stats[l.Key] = s
 		}
 		s.Runs++
+		switch l.Outcome {
+		case record.OutcomePass:
+			s.Pass++
+		case record.OutcomeFail:
+			s.Fail++
+		case record.OutcomeBlocked:
+			s.Blocked++
+		case record.OutcomeSkip:
+			s.Skip++
+		case record.OutcomeCached:
+			s.Cached++
+		}
+		s.LastOutcome, s.LastGate = l.Outcome, l.Gate
+		s.LastDetail = l.Detail
+		s.LastTime = &t
+		s.LastCommit, s.LastWorktree, s.LastProfile = l.Commit, l.Worktree, l.Profile
 		if l.ElapsedMS != nil {
 			s.TotalMS += *l.ElapsedMS
 			s.Timed++
@@ -253,7 +301,10 @@ func aggregate(lines []record.Line, meta *metaOut) (map[string]*checkStats, []in
 			orphans[l.Key] = o
 		}
 		o.Runs++
-		if l.Outcome == string(check.Fail) {
+		o.LastOutcome, o.LastGate = l.Outcome, l.Gate
+		o.LastTime = &t
+		o.LastCommit, o.LastWorktree, o.LastProfile = l.Commit, l.Worktree, l.Profile
+		if l.Outcome == record.OutcomeFail {
 			o.LastFail, o.LastFailGate = &t, l.Gate
 		}
 	}

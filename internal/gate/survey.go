@@ -35,13 +35,27 @@ type Survey struct {
 }
 
 // NewSurvey discovers every source's checks and reconciles them with the
-// inventory and, when config is set, the gate configuration. An error means
-// the inventory or routing list cannot be read. Close removes the scratch
-// directory.
-func NewSurvey(ctx context.Context, root string, sources []check.Source, config ConfigChecker, log io.Writer) (*Survey, error) {
+// inventory and, when config is set, the gate configuration. When only is
+// set, discovery and reconciliation cover only those runners: sources
+// owning none of them never start, which keeps a scoped list from needing
+// the excluded runners' SDKs. An error means the inventory or routing list
+// cannot be read. Close removes the scratch directory.
+func NewSurvey(ctx context.Context, root string, sources []check.Source, config ConfigChecker, log io.Writer, only map[string]bool) (*Survey, error) {
 	tracked, err := gitx.Tracked(root)
 	if err != nil {
 		return nil, err
+	}
+	if only != nil {
+		var kept []check.Source
+		for _, src := range sources {
+			for _, r := range src.Runners() {
+				if only[r] {
+					kept = append(kept, src)
+					break
+				}
+			}
+		}
+		sources = kept
 	}
 	inv, err := inventory.LoadInventory(root)
 	if err != nil {
@@ -73,6 +87,28 @@ func NewSurvey(ctx context.Context, root string, sources []check.Source, config 
 		}
 	}
 	s.discover(ctx)
+	if only != nil {
+		// A multi-runner source kept for one runner still discovers the
+		// rest; prune them so reconciliation sees the scoped world.
+		for r := range s.Keys {
+			if !only[r] {
+				delete(s.Keys, r)
+			}
+		}
+		for r := range s.Failed {
+			if !only[r] {
+				delete(s.Failed, r)
+			}
+		}
+		var kept []inventory.Entry
+		for _, e := range inv.Checks {
+			if only[e.Runner] {
+				kept = append(kept, e)
+			}
+		}
+		inv.Checks = kept
+		s.Inventory = inv
+	}
 	known := map[string]bool{}
 	for r := range s.Owner {
 		known[r] = true

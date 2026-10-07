@@ -20,8 +20,8 @@ type Group struct {
 }
 
 // CheckStat summarizes one check in one gate and context. Hits counts runs of
-// consecutive fail outcomes that a pass ends; blocked outcomes neither start
-// nor end one. AvgMS averages the timed outcomes among
+// consecutive fail outcomes that a pass or a cached pass ends; blocked and
+// skip outcomes neither start nor end one. AvgMS averages the timed outcomes among
 // the last N, and is nil when none of them carries elapsed time.
 type CheckStat struct {
 	Group
@@ -96,13 +96,18 @@ func Stats(lines []Line, f Filter, n int) ([]CheckStat, []InvocationStat, []Guar
 		failing := false
 		for _, l := range ls {
 			switch l.Outcome {
-			case "fail":
+			case OutcomeFail:
 				if !failing {
 					s.Hits++
 				}
 				failing = true
-			case "pass":
+			case OutcomePass, OutcomeCached:
+				// A cached pass replays an earlier pass, so it ends a fail
+				// run like a fresh pass. It carries no fresh timing: the
+				// gate omits elapsed_ms on cached outcomes.
 				failing = false
+			default:
+				// blocked and skip neither start nor end a fail run.
 			}
 		}
 		s.Timed, s.AvgMS = average(window(ls, n))

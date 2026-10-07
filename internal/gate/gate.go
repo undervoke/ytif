@@ -28,6 +28,7 @@ type Options struct {
 	Report  string    // "" or "github"
 	Records string    // "" means <git-common-dir>/ytif/records.jsonl
 	Context string    // "" detects ci or local
+	Profile string    // "" runs every source; otherwise the execution adapter's profile
 	Stdin   io.Reader // push only: pre-push ref lines
 	Stdout  io.Writer
 	Stderr  io.Writer
@@ -47,7 +48,10 @@ func Run(ctx context.Context, root string, o Options) int {
 		fmt.Fprintf(o.Stderr, "ytif: unknown gate %q\n", o.Gate)
 		return ExitUsage
 	}
-	s, err := NewSurvey(ctx, root, o.Sources, o.Config, o.Stderr)
+	if o.Profile != "" {
+		return runProfile(ctx, root, o)
+	}
+	s, err := NewSurvey(ctx, root, o.Sources, o.Config, o.Stderr, nil)
 	if err != nil {
 		fmt.Fprintf(o.Stderr, "ytif: %v\n", err)
 		return ExitUsage
@@ -63,11 +67,18 @@ func Run(ctx context.Context, root string, o Options) int {
 
 	fmt.Fprintf(o.Stdout, "ytif %s · %d selected · %s %d files\n", o.Gate, len(selected), in.Scope, len(in.Files))
 
+	run := collect(ctx, s, selected, in)
+	findings := s.Findings()
+	listing := check.Report{Invocations: s.Listing}
+	run.reports = append([]check.Report{listing}, run.reports...)
+	return finish(ctx, o, root, in.Scope, run, findings)
+}
+
+// finish presents one run, writes its records, and returns its exit code.
+func finish(ctx context.Context, o Options, root, scope string, run outcome, findings []reconcile.Finding) int {
 	cancelledAt := make(chan time.Time, 1)
 	stop := context.AfterFunc(ctx, func() { cancelledAt <- time.Now() })
 	defer stop()
-	run := collect(ctx, s, selected, in)
-	findings := s.Findings()
 	exit := present(o, run, findings)
 	var cutoff time.Time
 	if ctx.Err() != nil {
@@ -80,9 +91,8 @@ func Run(ctx context.Context, root string, o Options) int {
 	if ctxName == "" {
 		ctxName = detectContext()
 	}
-	listing := check.Report{Invocations: s.Listing}
-	run.reports = append([]check.Report{listing}, run.reports...)
-	if err := writeRecords(root, o.Records, recordLines(o.Gate, ctxName, in.Scope, run, findings, cutoff)); err != nil {
+	prov := provenance{commit: gitx.Head(root), worktree: root, profile: o.Profile}
+	if err := writeRecords(root, o.Records, recordLines(o.Gate, ctxName, scope, prov, run, findings, cutoff)); err != nil {
 		// A run whose cost and outcomes are not recorded did not complete.
 		fmt.Fprintf(o.Stderr, "ytif: records not written: %v\n", err)
 		return ExitUsage
@@ -140,13 +150,25 @@ func detectContext() string {
 	return "ci"
 }
 
+// provenance identifies where a run executed. Empty fields mean unknown:
+// records written before provenance existed, or a repository without
+// commits yet.
+type provenance struct {
+	commit   string
+	worktree string
+	profile  string
+}
+
 // recordLines turns one run into records. After an interruption at cutoff,
 // a process the interruption stopped leaves no records of its own, and its
 // checks only those outcomes known to have come before the interruption.
-func recordLines(gate, ctxName, scope string, run outcome, findings []reconcile.Finding, cutoff time.Time) []record.Line {
+// Skips are preserved as result lines with the skip outcome and no elapsed
+// time, so the board can tell a skipped check from an unrecorded one.
+func recordLines(gate, ctxName, scope string, prov provenance, run outcome, findings []reconcile.Finding, cutoff time.Time) []record.Line {
 	now := time.Now().UTC()
 	attempt := record.NewAttempt()
-	base := record.Line{Time: now, Attempt: attempt, Gate: gate, Context: ctxName, Scope: scope}
+	base := record.Line{Time: now, Attempt: attempt, Gate: gate, Context: ctxName, Scope: scope,
+		Commit: prov.commit, Worktree: prov.worktree, Profile: prov.profile}
 	stopped := map[check.Key]bool{}
 	for _, rep := range run.reports {
 		for _, inv := range rep.Invocations {
@@ -165,9 +187,15 @@ func recordLines(gate, ctxName, scope string, run outcome, findings []reconcile.
 			}
 			l := base
 			l.Kind, l.Key, l.Runner, l.Unit, l.Outcome = record.KindResult, r.Key.String(), r.Key.Runner, r.Key.Unit, string(r.Outcome)
+			l.Detail = clip(r.Output)
 			if r.Timed {
 				l.ElapsedMS = record.Millis(r.Elapsed)
 			}
+			lines = append(lines, l)
+		}
+		for _, k := range rep.Skipped {
+			l := base
+			l.Kind, l.Key, l.Runner, l.Unit, l.Outcome = record.KindResult, k.String(), k.Runner, k.Unit, record.OutcomeSkip
 			lines = append(lines, l)
 		}
 		for _, inv := range rep.Invocations {

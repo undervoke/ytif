@@ -22,6 +22,17 @@ func Root(dir string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// Head returns the current commit hash. It returns "" when the repository
+// has no commits yet; provenance is best-effort and records mark it
+// unknown.
+func Head(root string) string {
+	out, err := git(root, nil, "rev-parse", "HEAD")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // CommonDir returns the absolute git common directory, shared by worktrees.
 func CommonDir(root string) (string, error) {
 	out, err := git(root, nil, "rev-parse", "--path-format=absolute", "--git-common-dir")

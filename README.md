@@ -39,6 +39,7 @@ Checks are discovered, never registered by hand. A key is `runner:unit:name`:
 | `go-test` | `TestXxx`, `FuzzXxx`, examples with output | package directory | function |
 | `bun-test`, `node-test` | `*.test.*` files importing `bun:test` or `node:test` | file | `suite > test` |
 | `dotnet-test` | `.csproj` referencing `Microsoft.NET.Test.Sdk` | `.csproj` path | method |
+| adapter runners | the project's `ytif-execution.yaml` adapter | adapter-defined | adapter-defined |
 
 A Go check uses only standard-library types:
 
@@ -55,6 +56,11 @@ static; what ytif cannot list exactly fails discovery.
 Discovery reads Git-tracked files only, so an untracked new test stays
 invisible until staged. `ytif list` and every gate discover all runners
 whatever the placement, and .NET discovery builds the test projects.
+`ytif list --runners node-test,go-test` scopes discovery and
+reconciliation to those runners, so a scoped list never starts the
+excluded runners' SDKs. `ytif list --json` prints the same world as one
+JSON document: managed checks with their contracts, per-runner discovery
+counts, and structured findings.
 
 ## The inventory
 
@@ -113,7 +119,9 @@ and a relation to a check outside the inventory are findings.
 | `ytif ci` | commit, push, ci | every tracked file |
 
 Placement alone selects the checks; the files are input for Go checks, not
-a filter on tests.
+a filter on tests. `--profile NAME` instead runs the `ytif-execution.yaml`
+profile through the project's adapter, with no native discovery at all:
+a Node-only hook runs without .NET, Go, or Bun installed.
 
 ```yaml
 # lefthook.yml
@@ -166,6 +174,62 @@ entries:
 `ytif list` shows checks and findings; `ytif stats` shows recorded time and
 hits, where a hit is a run of consecutive fails that a pass ends.
 `ytif ci --report github` emits annotations.
+
+## Project adapters and profiles
+
+A repository whose checks ytif cannot discover natively — Vitest or
+Playwright tests, Nx targets, package scripts — routes them through an
+adapter it owns, declared in `ytif-execution.yaml`:
+
+```yaml
+version: 1
+adapter:
+  command: [node, tools/workspace/verification/adapter.mjs]
+  runners: [command, vitest-test, playwright-test]
+profiles:
+  node:
+    description: Node checks for hooks.
+```
+
+The adapter is a command the rail invokes with one JSON document on
+stdin — `{version: 1, operation, root, tracked, profile, gate, scope,
+files, inventory, selected?}` — and reads one JSON document from stdout;
+field names are lowercase, stderr carries progress. Operations:
+
+- `discover` replies `{checks: [{runner, unit, name}]}`.
+- `select` replies `{selected: [...]}` and runs nothing. The rail
+  preflights the selection — unknown runners, duplicates, and checks
+  placed after the gate fail before any side effects.
+- `run` echoes the approved selection in its request and must run
+  exactly it; a reply that selects anything else fails. It replies
+  `{selected: [...], results: [{runner, unit, name, outcome, elapsedMs?,
+  output?}], skipped?: [...], invocations?: [{runner, unit?, what,
+  elapsedMs?, error?}]}`. Selection must be deterministic: what `select`
+  approves is what `run` runs.
+
+Outcomes are `pass`, `fail`, or `blocked`; `elapsedMs` accepts integers
+and fractions and rounds to the nearest millisecond. Whatever the
+adapter does not report stays without an outcome rather than becoming a
+pass, and a process failure with valid JSON keeps the partial results it
+parsed. Every result, skip, invocation, dispatch, and finding record
+carries the run's commit, worktree, and profile; skips are preserved as
+result lines with the `skip` outcome and no elapsed time.
+
+Full gates discover through the adapter alongside the native sources and
+run its checks like any other source; the adapter owns its declared
+runners, which must not collide with native ones. A profile gate skips
+native discovery entirely and asks the adapter to select from the gate,
+scope, files, and full inventory entries: the profile owns the project's
+existing orchestration and may report native runner keys too. The gate
+fails unregistered, misplaced, duplicated, or missing outcomes, and
+reconciles the selected keys and the gate configuration only.
+
+```yaml
+# lefthook.yml
+pre-commit:
+  jobs:
+    - run: go tool ytif commit --profile node
+```
 
 ## Board
 

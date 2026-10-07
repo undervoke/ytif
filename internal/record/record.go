@@ -26,6 +26,18 @@ const (
 	KindGuard      = "guard"      // one refused agent command
 )
 
+// Result outcomes for KindResult lines. A skip is a check that ran and
+// reported a skip, so it carries no fresh verdict and no elapsed time. A
+// cached pass replays an earlier pass: it ends a fail run like a pass but
+// carries no fresh timing, so the gate must omit elapsed_ms on it.
+const (
+	OutcomePass    = "pass"
+	OutcomeFail    = "fail"
+	OutcomeBlocked = "blocked"
+	OutcomeSkip    = "skip"
+	OutcomeCached  = "cached"
+)
+
 // Line is one record.
 type Line struct {
 	Time      time.Time `json:"time"`
@@ -41,6 +53,11 @@ type Line struct {
 	Outcome   string    `json:"outcome,omitempty"`
 	ElapsedMS *int64    `json:"elapsed_ms,omitempty"` // nil when unknown
 	Detail    string    `json:"detail,omitempty"`
+	// Provenance of the run. Empty means unknown: a record written before
+	// provenance was collected. The board shows such records as historical.
+	Commit   string `json:"commit,omitempty"`
+	Worktree string `json:"worktree,omitempty"`
+	Profile  string `json:"profile,omitempty"`
 }
 
 // Millis converts d for ElapsedMS.

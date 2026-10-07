@@ -35,25 +35,27 @@ type Inventory struct {
 // Entry is one check's contract and placement. Tags describe the accident
 // in the built-in and project vocabularies; Requires and Ensures name other
 // inventoried checks this one directly depends on or keeps working.
+// Entry and Ref carry JSON names matching their YAML names so an adapter
+// run request can decode the full inventory entries it selects from.
 type Entry struct {
-	Runner     string   `yaml:"runner"`
-	Unit       string   `yaml:"unit"`
-	Name       string   `yaml:"name"`
-	Placement  string   `yaml:"placement"`
-	Tags       []string `yaml:"tags,omitempty"`
-	Requires   []Ref    `yaml:"requires,omitempty"`
-	Ensures    []Ref    `yaml:"ensures,omitempty"`
-	Accident   string   `yaml:"accident"`
-	Detection  string   `yaml:"detection"`
-	Impact     string   `yaml:"impact"`
-	DeleteWhen string   `yaml:"delete_when"`
+	Runner     string   `yaml:"runner" json:"runner"`
+	Unit       string   `yaml:"unit" json:"unit"`
+	Name       string   `yaml:"name" json:"name"`
+	Placement  string   `yaml:"placement" json:"placement"`
+	Tags       []string `yaml:"tags,omitempty" json:"tags,omitempty"`
+	Requires   []Ref    `yaml:"requires,omitempty" json:"requires,omitempty"`
+	Ensures    []Ref    `yaml:"ensures,omitempty" json:"ensures,omitempty"`
+	Accident   string   `yaml:"accident" json:"accident"`
+	Detection  string   `yaml:"detection" json:"detection"`
+	Impact     string   `yaml:"impact" json:"impact"`
+	DeleteWhen string   `yaml:"delete_when" json:"delete_when"`
 }
 
 // Ref names another inventoried check.
 type Ref struct {
-	Runner string `yaml:"runner"`
-	Unit   string `yaml:"unit"`
-	Name   string `yaml:"name"`
+	Runner string `yaml:"runner" json:"runner"`
+	Unit   string `yaml:"unit" json:"unit"`
+	Name   string `yaml:"name" json:"name"`
 }
 
 // Key returns the referenced check key.
