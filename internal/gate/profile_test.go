@@ -205,6 +205,34 @@ func TestProfileGate(t *testing.T) {
 		}
 	})
 
+	t.Run("cached result remains cached without fresh timing", func(t *testing.T) {
+		f := newFixture(t)
+		f.stageReply(t, `{"selected":[{"runner":"command","unit":"lint","name":"gofmt"}],"results":[{"runner":"command","unit":"lint","name":"gofmt","outcome":"cached","elapsedMs":9,"output":"Nx reused task cache"}]}`)
+		exit, stdout, _, lines := f.runProfile(t, ctx, "commit", nil)
+		if exit != 0 || !strings.Contains(stdout, "1 cached") || !strings.Contains(stdout, "0 passed") {
+			t.Fatalf("cached replay rejected or presented as fresh: exit=%d\n%s", exit, stdout)
+		}
+		results := resultLines(lines)
+		if len(results) != 1 || results[0]["outcome"] != "cached" || results[0]["detail"] != "Nx reused task cache" {
+			t.Fatalf("cache evidence lost: %v", lines)
+		}
+		if _, ok := results[0]["elapsed_ms"]; ok {
+			t.Fatalf("cache replay has fresh test timing: %v", results[0])
+		}
+	})
+
+	t.Run("blocked-only results cannot certify the gate", func(t *testing.T) {
+		f := newFixture(t)
+		f.stageReply(t, `{"selected":[{"runner":"command","unit":"lint","name":"gofmt"}],"results":[{"runner":"command","unit":"lint","name":"gofmt","outcome":"blocked","output":"dependency unavailable"}]}`)
+		exit, stdout, _, lines := f.runProfile(t, ctx, "commit", nil)
+		if exit != 1 || !strings.Contains(stdout, "1 blocked") {
+			t.Fatalf("blocked selection certified: exit=%d\n%s", exit, stdout)
+		}
+		if results := resultLines(lines); len(results) != 1 || results[0]["outcome"] != "blocked" {
+			t.Fatalf("blocker lost: %v", lines)
+		}
+	})
+
 	t.Run("fail fails the gate", func(t *testing.T) {
 		f := newFixture(t)
 		f.stageReply(t, `{"selected":[{"runner":"command","unit":"lint","name":"gofmt"}],

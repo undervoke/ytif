@@ -140,7 +140,7 @@ func validate(rep check.Report, name string, src check.Source, s *Survey, keys [
 			continue
 		}
 		switch r.Outcome {
-		case check.Pass, check.Fail, check.Blocked:
+		case check.Pass, check.Fail, check.Blocked, check.Cached:
 			results = append(results, r)
 		default:
 			why := fmt.Sprintf("%s reported the unknown outcome %q", name, r.Outcome)

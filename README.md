@@ -207,7 +207,7 @@ field names are lowercase, stderr carries progress. Operations:
   elapsedMs?, error?}]}`. Selection must be deterministic: what `select`
   approves is what `run` runs.
 
-Outcomes are `pass`, `fail`, or `blocked`; `elapsedMs` accepts integers
+Outcomes are `pass`, `fail`, `blocked`, or `cached`. Cached results carry no fresh check timing; `elapsedMs` accepts integers
 and fractions and rounds to the nearest millisecond. Whatever the
 adapter does not report stays without an outcome rather than becoming a
 pass, and a process failure with valid JSON keeps the partial results it

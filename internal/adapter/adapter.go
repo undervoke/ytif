@@ -17,7 +17,8 @@
 // elapsedMs?,output?}], skipped?:[...],
 // invocations?:[{runner,unit?,what,elapsedMs?,error?}]}; its request echoes
 // the approved selection, which the adapter must run exactly. Outcomes are
-// pass, fail, or blocked; elapsedMs accepts integers and fractions and
+// pass, fail, blocked, or cached; cached results carry no fresh check timing.
+// elapsedMs accepts integers and fractions and
 // rounds to the nearest millisecond. Whatever the adapter does not report
 // stays without an outcome rather than becoming a pass, and a process
 // failure with valid JSON keeps the partial results it parsed.
@@ -415,12 +416,12 @@ func parseRun(name string, accept func(string) bool, data []byte) ([]check.Key, 
 			reported[k] = true
 			out := check.Result{Key: k, Outcome: r.Outcome, Output: r.Output}
 			switch r.Outcome {
-			case check.Pass, check.Fail, check.Blocked:
+			case check.Pass, check.Fail, check.Blocked, check.Cached:
 			default:
 				fail("reported %s with the unknown outcome %q", k, r.Outcome)
 				continue
 			}
-			if r.ElapsedMS != nil {
+			if r.ElapsedMS != nil && r.Outcome != check.Cached {
 				out.Elapsed, out.Timed = r.ElapsedMS.duration(), true
 			}
 			rep.Results = append(rep.Results, out)

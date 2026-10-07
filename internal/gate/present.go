@@ -22,7 +22,7 @@ func present(o Options, run outcome, findings []reconcile.Finding) int {
 	w := o.Stdout
 	reports, dispatch := run.reports, run.dispatch
 	github := o.Report == "github"
-	var passed, failed, blocked, skipped int
+	var passed, failed, blocked, skipped, cached int
 	for _, rep := range reports {
 		for _, r := range rep.Results {
 			switch r.Outcome {
@@ -32,6 +32,8 @@ func present(o Options, run outcome, findings []reconcile.Finding) int {
 				failed++
 			case check.Blocked:
 				blocked++
+			case check.Cached:
+				cached++
 			}
 			fmt.Fprintf(w, "%-8s %s%s\n", strings.ToUpper(string(r.Outcome)), r.Key, elapsed(r))
 			// A passing check's output is its log, shown as a failing
@@ -104,7 +106,7 @@ func present(o Options, run outcome, findings []reconcile.Finding) int {
 		}
 	}
 
-	failing := failed > 0 || len(dispatch) > 0 || invErrors > 0 || len(run.problems) > 0
+	failing := failed > 0 || blocked > 0 || len(dispatch) > 0 || invErrors > 0 || len(run.problems) > 0
 	if len(findings) > 0 {
 		failing = true
 	}
@@ -112,7 +114,7 @@ func present(o Options, run outcome, findings []reconcile.Finding) int {
 	for _, p := range []struct {
 		n    int
 		what string
-	}{{failed, "failed"}, {blocked, "blocked"}, {skipped, "skipped"}, {len(dispatch), "without outcome"}, {invErrors + len(run.problems), "errors"}, {len(findings), "findings"}} {
+	}{{failed, "failed"}, {blocked, "blocked"}, {skipped, "skipped"}, {cached, "cached"}, {len(dispatch), "without outcome"}, {invErrors + len(run.problems), "errors"}, {len(findings), "findings"}} {
 		if p.n > 0 {
 			parts = append(parts, fmt.Sprintf("%d %s", p.n, p.what))
 		}

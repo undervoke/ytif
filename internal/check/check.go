@@ -69,6 +69,8 @@ type Outcome string
 const (
 	Pass Outcome = "pass"
 	Fail Outcome = "fail"
+	// Cached is a reused successful result, with no fresh check duration.
+	Cached Outcome = "cached"
 	// Blocked means a dependency failed in the same invocation; it is neither
 	// a pass nor a hit.
 	Blocked Outcome = "blocked"

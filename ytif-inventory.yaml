@@ -23,9 +23,9 @@ checks:
     name: TestProfileGate
     placement: commit
     tags: [fault, mistake, misdirection, silent, manual]
-    accident: A profile gate accepts a selection its inventory forbids, drops an adapter failure, or starts native discovery it promised to skip.
-    detection: Runs profile gates in isolated git fixtures with canned adapter replies, failing unless exits, console lines, and record lines match.
-    impact: A hook reports pass while forbidden or failed checks never ran.
+    accident: A protocol refactor drops cached outcomes, counts blockers as success, accepts a mismatched selection, or starts unrelated native discovery for a profile.
+    detection: Runs profile gates in isolated Git fixtures with adapter subprocess replies, including cached and blocked-only results, and checks exit status, selection, diagnostics, timing, and persisted records.
+    impact: Gates misreport execution state or trigger work outside the selected profile.
     delete_when: Gates no longer run execution profiles.
   - runner: go-test
     unit: internal/gate
