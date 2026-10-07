@@ -14,13 +14,13 @@ Pin ytif per project, so hooks, CI, and every clone run the version the
 project's files were written for. In a Go module (Go 1.24 or later):
 
 ```sh
-go get -tool github.com/undervoke/ytif/cmd/ytif@v0.1.0
+go get -tool github.com/undervoke/ytif/cmd/ytif@v0.2.0
 ```
 
 `go.mod` and `go.sum` then hold the version, and `go tool ytif` runs it;
 read every `ytif` below as `go tool ytif`. Elsewhere, download a release
 archive and verify it against `SHA256SUMS`, or run
-`go run github.com/undervoke/ytif/cmd/ytif@v0.1.0`. The gates also need
+`go run github.com/undervoke/ytif/cmd/ytif@v0.2.0`. The gates also need
 the test runners the project uses.
 
 To adopt it, stage any new check files and run `ytif list`. Every
@@ -75,14 +75,16 @@ checks:
     requires:                  # optional: checks this one depends on
       - { runner: go-test, unit: internal/release, name: TestVersionBump }
     accident: A release bumps the version without a changelog entry.
+    detection: Reads the version and the changelog, and fails when the version has no entry.
     impact: The release ships notes that do not describe it.
     delete_when: Release notes are generated from commits.
 ```
 
-`accident` is an ordinary, unintended change the check catches, `impact`
-what users see when that change ships, and `delete_when` an observable
-condition for removing the check; all three are required. You choose the
-placement: an earlier gate for a check worth its cost there, as
+`accident` is an ordinary, unintended change the check catches,
+`detection` what the check runs and observes so that the accident fails
+it, `impact` what users see when that change ships, and `delete_when` an
+observable condition for removing the check; all four are required. You
+choose the placement: an earlier gate for a check worth its cost there, as
 `ytif stats` shows.
 
 Tags describe the accident. ytif ships these groups; every check carries
@@ -174,6 +176,16 @@ Its pages list and filter checks by tag, draw a check's relations and
 nearest checks, show each check's cost and hits, and lay out the
 vocabulary, in English or Korean. Exit codes: `0` pass,
 `1` fail, `2` usage or configuration error.
+
+To work on the page itself, run from this repository's root:
+
+```sh
+go run ./internal/board/devserve <repo>
+```
+
+It serves the board of `<repo>`, a repository with an inventory and records,
+at `http://127.0.0.1:8765`, rebuilding the page from
+`internal/board/assets` on each request, so an edit shows on reload.
 
 ## Agent guard
 

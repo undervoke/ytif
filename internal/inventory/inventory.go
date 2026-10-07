@@ -44,6 +44,7 @@ type Entry struct {
 	Requires   []Ref    `yaml:"requires,omitempty"`
 	Ensures    []Ref    `yaml:"ensures,omitempty"`
 	Accident   string   `yaml:"accident"`
+	Detection  string   `yaml:"detection"`
 	Impact     string   `yaml:"impact"`
 	DeleteWhen string   `yaml:"delete_when"`
 }
@@ -70,6 +71,7 @@ func (e Entry) MissingContract() []string {
 	var missing []string
 	for _, f := range []struct{ name, value string }{
 		{"accident", e.Accident},
+		{"detection", e.Detection},
 		{"impact", e.Impact},
 		{"delete_when", e.DeleteWhen},
 	} {

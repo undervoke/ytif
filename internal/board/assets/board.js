@@ -10,14 +10,15 @@ const D = JSON.parse(document.getElementById("data").textContent);
 // ---- text ----
 const T = {
   en: {
-    tabChecks: "Checks", tabDiagram: "Diagram", tabCost: "Cost & hits", tabVocab: "Vocabulary", otherLang: "한국어",
+    tabChecks: "Checks", tabDiagram: "Diagram", tabCost: "Cost & hits", tabVocab: "Vocabulary", langName: "English", language: "Language",
+    theme: "Theme", themes: { system: "System", light: "Light", dark: "Dark" },
     meta: (r, v, g) => `${r} · inventory v${v} · generated ${g}`,
     filters: "Filters", clearAll: "Clear all", filterHelp: "A check stays when it matches any chosen tag in a group, in every group.",
     searchList: "Find by impact, test name, or unit", sort: "Sort", sortInv: "Inventory order", sortUnit: "By unit", sortCost: "Highest cost",
     count: (n, t) => `<b>${n}</b> of ${t}`, colImpact: "Impact · check", colTags: "Tags", colGate: "Gate",
     more: (k, r) => `${k} more · ${r} left`, noMatch: "No check matches.",
     searchCheck: "Find a check: impact, test name, unit", matchCount: (m, n) => `${m} of ${n} match`, firstShown: l => ` · first ${l} shown`,
-    recent: "Recent", checkedAt: p => `checked at ${p}`, accident: "Accident", deleteWhen: "Delete when", location: "Location",
+    recent: "Recent", checkedAt: p => `checked at ${p}`, accident: "Accident", detection: "Detection", deleteWhen: "Delete when", location: "Location",
     relations: "Direct relations", requires: "Requires", ensures: "Ensures", requiredBy: "Required by", ensuredBy: "Ensured by",
     closest: "Closest checks", byScore: "by score", tags: "Tags", component: "Component", unit: "unit",
     show: n => `Show · ${n} sharing`, hide: "Hide", moreLeft: (k, r) => `${k} more (${r} left)`, noPeers: "No other check shares this.",
@@ -26,7 +27,7 @@ const T = {
     source: (f, t, n, parts) => `records · ${f} – ${t} · ${n} gate runs (${parts})`,
     gateTotal: g => `${g} gate check time`, hitsTotal: n => `Hits (${n} inventoried checks)`, unrecorded: "Checks without records",
     checksHead: "Checks", sortTotal: "Largest total", sortHits: "Most hits", sortAvg: "Largest average", sortRuns: "Fewest runs",
-    colRuns: "Runs", colHits: "Hits", colTotal: "Total", colAvg: "Average", colSplit: "By gate",
+    colRuns: "Runs", colHits: "Hits", colTotal: "Total", colAvg: "Average",
     costNote: "A hit counts consecutive fails that a pass ends as one. Times are each check's own run time; builds and processes are in the unit table.",
     units: "Unit build and process time", times: n => `${n}×`, orphans: "Records of checks not in the inventory",
     orphanNote: "Checks since deleted or renamed: what they caught before they left.", lastFail: (t, g) => `last fail ${t} · ${g}`,
@@ -37,14 +38,15 @@ const T = {
     when: "When", whenSub: "Checked at", whenText: "Not a tag: the placement field (commit · push · ci).",
   },
   ko: {
-    tabChecks: "검증", tabDiagram: "다이어그램", tabCost: "비용·hit", tabVocab: "어휘표", otherLang: "English",
+    tabChecks: "검증", tabDiagram: "다이어그램", tabCost: "비용·hit", tabVocab: "어휘표", langName: "한국어", language: "언어",
+    theme: "테마", themes: { system: "시스템", light: "라이트", dark: "다크" },
     meta: (r, v, g) => `${r} · inventory v${v} · 생성 ${g}`,
     filters: "필터", clearAll: "모두 해제", filterHelp: "같은 묶음 안에서는 하나라도, 묶음끼리는 모두 맞아야 남습니다.",
     searchList: "impact, 테스트 이름, unit으로 찾기", sort: "정렬", sortInv: "인벤토리 순", sortUnit: "unit 순", sortCost: "비용 큰 순",
     count: (n, t) => `<b>${n}</b>개 / ${t}`, colImpact: "impact · 검증", colTags: "태그", colGate: "gate",
     more: (k, r) => `${k}개 더 보기 · ${r}개 남음`, noMatch: "맞는 검증이 없습니다.",
     searchCheck: "검증 찾기: impact, 테스트 이름, unit", matchCount: (m, n) => `${n}개 중 ${m}개 일치`, firstShown: l => ` · 앞의 ${l}개만 표시`,
-    recent: "최근 본 검증", checkedAt: p => `${p} 때 검사`, accident: "사고", deleteWhen: "삭제 조건", location: "위치",
+    recent: "최근 본 검증", checkedAt: p => `${p} 때 검사`, accident: "사고", detection: "탐지", deleteWhen: "삭제 조건", location: "위치",
     relations: "직접 관계", requires: "선행 조건", ensures: "보장 대상", requiredBy: "이 검증을 필요로 함", ensuredBy: "이 검증을 보장함",
     closest: "가장 가까운 검증", byScore: "점수 순", tags: "태그", component: "컴포넌트", unit: "unit",
     show: n => `펼치기 · 같은 검증 ${n}개`, hide: "접기", moreLeft: (k, r) => `${k}개 더 보기 (${r}개 남음)`, noPeers: "이 값을 가진 다른 검증이 없습니다.",
@@ -53,7 +55,7 @@ const T = {
     source: (f, t, n, parts) => `records · ${f} – ${t} · gate 실행 ${n}회 (${parts})`,
     gateTotal: g => `${g} gate 검증 시간 합`, hitsTotal: n => `hit (인벤토리 검증 ${n}개)`, unrecorded: "기록이 없는 검증",
     checksHead: "검증", sortTotal: "총 시간 큰 순", sortHits: "hit 많은 순", sortAvg: "평균 시간 큰 순", sortRuns: "실행 수 적은 순",
-    colRuns: "실행", colHits: "hit", colTotal: "총 시간", colAvg: "평균", colSplit: "gate별",
+    colRuns: "실행", colHits: "hit", colTotal: "총 시간", colAvg: "평균",
     costNote: "hit는 pass로 끊기는 연속 fail을 1회로 셉니다. 시간은 검증 자신의 실행 시간이고, 빌드와 프로세스 시간은 아래 unit 표에 있습니다.",
     units: "unit 빌드·프로세스 시간", times: n => `${n}회`, orphans: "인벤토리에 없는 검증의 기록",
     orphanNote: "지우거나 이름을 바꾼 검증의 기록입니다. 떠나기 전 무엇을 잡았는지 보여 줍니다.", lastFail: (t, g) => `마지막 fail ${t} · ${g}`,
@@ -160,10 +162,56 @@ function header(r) {
   $("#tabs").innerHTML = tabs.map(([p, h, label, n]) =>
     `<a href="${h}"${r.page === p ? ` aria-current="page"` : ""}>${esc(label)}${n == null ? "" : ` <span class="count num">${fmt(n)}</span>`}</a>`).join("");
   $("#meta").textContent = t("meta", D.meta.repo, D.meta.version, when(D.meta.generated));
-  $("#lang").textContent = t("otherLang");
+  const themeText = `${t("theme")}: ${t("themes")[theme]}`;
+  $("#theme").setAttribute("aria-label", themeText);
+  $("#theme").title = themeText;
+  $("#theme use").setAttribute("href", THEME_ICON[theme]);
+  $("#lang").setAttribute("aria-label", t("language"));
+  $("#lang").title = t("language");
+  $("#langmenu").innerHTML = Object.keys(T).map(k =>
+    `<button type="button" role="menuitemradio" data-lang="${k}" lang="${k}" aria-checked="${k === lang}" tabindex="-1"><svg class="i"><use href="#i-check"/></svg>${esc(T[k].langName)}</button>`).join("");
   document.documentElement.lang = lang;
 }
-$("#lang").addEventListener("click", () => { lang = lang === "ko" ? "en" : "ko"; store.set("lang", lang); render() });
+
+// theme cycles system → light → dark; the head script applies a stored choice before first paint
+const THEMES = ["system", "light", "dark"];
+const THEME_ICON = { system: "#i-monitor", light: "#i-sun", dark: "#i-moon" };
+let theme = document.documentElement.dataset.theme || "system";
+$("#theme").addEventListener("click", () => {
+  theme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
+  if (theme === "system") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+  store.set("theme", theme);
+  header(route());
+});
+
+const langMenu = {
+  items: () => [...$("#langmenu").querySelectorAll("button")],
+  open() {
+    $("#langmenu").hidden = false;
+    $("#lang").setAttribute("aria-expanded", "true");
+    (this.items().find(b => b.getAttribute("aria-checked") === "true") || this.items()[0]).focus();
+  },
+  close(refocus) {
+    $("#langmenu").hidden = true;
+    $("#lang").setAttribute("aria-expanded", "false");
+    if (refocus) $("#lang").focus();
+  },
+};
+$("#lang").addEventListener("click", () => $("#langmenu").hidden ? langMenu.open() : langMenu.close(false));
+$("#langmenu").addEventListener("click", e => {
+  const b = e.target.closest("button[data-lang]");
+  if (!b) return;
+  langMenu.close(true);
+  if (b.dataset.lang !== lang) { lang = b.dataset.lang; store.set("lang", lang); render() }
+});
+$("#langmenu").addEventListener("keydown", e => {
+  const items = langMenu.items(), i = items.indexOf(document.activeElement);
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    items[(i + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus();
+  } else if (e.key === "Escape" || e.key === "Tab") langMenu.close(e.key === "Escape");
+});
 
 // ---- checks page ----
 const list = { q: "", sort: store.get("sort", "inventory"), shown: 50 };
@@ -172,7 +220,7 @@ function filtersFrom(params) {
   return Object.fromEntries(GROUPS.map(g => [g.name, chosen.filter(tg => TAG[tg].group === g.name)]));
 }
 const passes = (c, f, skip) => GROUPS.every(g => g.name === skip || !f[g.name].length || shares(f[g.name], c.f[g.name]));
-const textMatch = (c, q) => !q || [c.name, c.accident, c.impact, c.unit].some(s => s.toLowerCase().includes(q));
+const textMatch = (c, q) => !q || [c.name, c.accident, c.detection, c.impact, c.unit].some(s => s.toLowerCase().includes(q));
 
 function checksPage(r) {
   const f = filtersFrom(r.params);
@@ -260,6 +308,7 @@ function diagramPage(r) {
   const branch = (k, head, leaves) => `<div class="branch"><div class="bhead" data-wire="core" id="h-${k}">${head}</div><div class="leaves">${leaves.join("")}</div></div>`;
   $("#left").innerHTML = [
     branch("accident", esc(t("accident")), [`<div class="leaf text" data-wire="h-accident">${esc(c.accident)}</div>`]),
+    branch("detection", esc(t("detection")), [`<div class="leaf text" data-wire="h-detection">${esc(c.detection)}</div>`]),
     branch("delete", esc(t("deleteWhen")), [`<div class="leaf text" data-wire="h-delete">${esc(c.delete_when)}</div>`]),
     branch("loc", esc(t("location")), [
       `<div class="leaf kv" data-wire="h-loc"><b>unit</b><span class="mono">${esc(c.unit)}</span></div>`,
@@ -334,6 +383,7 @@ function picker() {
   box.addEventListener("mousedown", e => { const b = e.target.closest(".res"); if (b) { e.preventDefault(); go(b.dataset.key) } });
 }
 document.addEventListener("mousedown", e => {
+  if (!$("#langmenu").hidden && !e.target.closest(".menuwrap")) langMenu.close(false);
   const box = $("#results");
   if (box && !e.target.closest(".sbox")) { box.hidden = true; $("#find")?.setAttribute("aria-expanded", "false") }
 });
@@ -375,7 +425,7 @@ function costPage() {
       <select id="csort">${[["total", "sortTotal"], ["hits", "sortHits"], ["avg", "sortAvg"], ["runs", "sortRuns"]].map(([v, k]) =>
         `<option value="${v}"${cost.sort === v ? " selected" : ""}>${esc(t(k))}</option>`).join("")}</select></span></section>
     <div class="card scroll"><div style="min-width: 980px" id="costrows"></div></div>
-    <p class="note">${esc(t("costNote"))}<span class="legend">${gates.map((g, i) => `<span><i style="background:${gateColor(i)}"></i>${esc(g)}</span>`).join("")}</span></p>
+    <p class="note">${esc(t("costNote"))}</p>
     <div class="split">
       <section style="flex: 3 1 520px"><h2>${esc(t("units"))}</h2><div class="card" id="units"></div></section>
       <section style="flex: 2 1 360px"><h2>${esc(t("orphans"))}</h2><p class="note">${esc(t("orphanNote"))}</p><div class="card" id="orphans"></div></section>
@@ -385,14 +435,15 @@ function costPage() {
     const key = { total: c => -(c.stats?.total_ms ?? -1), hits: c => -(c.stats?.hits ?? -1), avg: c => -avg(c), runs: c => c.stats?.runs ?? Infinity }[cost.sort];
     const rows = [...CHECKS].sort((a, b) => key(a) - key(b) || a.id - b.id);
     const max = Math.max(1, ...CHECKS.map(c => c.stats?.total_ms || 0));
-    $("#costrows").innerHTML = `<div class="costrow head"><span>${esc(t("colImpact"))}</span><span class="r">${esc(t("colRuns"))}</span><span class="r">${esc(t("colHits"))}</span><span>${esc(t("colTotal"))}</span><span class="r">${esc(t("colAvg"))}</span><span>${esc(t("colSplit"))}</span></div>` +
+    $("#costrows").innerHTML = `<div class="costrow head"><span>${esc(t("colImpact"))}</span><span class="r">${esc(t("colRuns"))}</span><span class="r">${esc(t("colHits"))}</span><span class="tothead">${esc(t("colTotal"))}<span class="legend">${gates.map((g, i) => `<span><i style="background:${gateColor(i)}"></i>${esc(g)}</span>`).join("")}</span></span><span class="r">${esc(t("colAvg"))}</span></div>` +
       rows.map(c => {
         const s = c.stats, total = s?.total_ms || 0;
-        const split = gates.map((g, i) => `<span style="width:${total ? (s.by_gate[g] || 0) / total * 100 : 0}%;background:${gateColor(i)}"></span>`).join("");
+        // one segment per gate, each scaled to the largest total, so length reads as time
+        const split = gates.map((g, i) => `<span style="width:${(s?.by_gate[g] || 0) / max * 100}%;background:${gateColor(i)}"></span>`).join("");
         return `<a class="costrow num" href="${href(c.key)}"><span class="what"><b>${esc(c.impact)}</b><span>${esc(c.name)}</span></span>
           <span class="r">${s ? fmt(s.runs) : "–"}</span><span class="r">${s ? fmt(s.hits) : "–"}</span>
-          <span class="total"><span class="bar"><span style="width:${total / max * 100}%;background:var(--accent)"></span></span><em>${s ? ms(total) : "–"}</em></span>
-          <span class="r">${s?.timed ? ms(avg(c)) : "–"}</span><span class="bar" title="${esc(gates.map(g => `${g} ${ms(s?.by_gate[g] || 0)}`).join(" · "))}">${split}</span></a>`;
+          <span class="total"${s ? ` title="${esc(gates.map(g => `${g} ${ms(s.by_gate[g] || 0)}`).join(" · "))}"` : ""}><span class="bar">${split}</span><em>${s ? ms(total) : "–"}</em></span>
+          <span class="r">${s?.timed ? ms(avg(c)) : "–"}</span></a>`;
       }).join("");
     const invs = D.invocations, umax = Math.max(1, ...invs.map(v => v.total_ms));
     $("#units").innerHTML = invs.length ? invs.slice(0, cost.units).map(v => `<div class="unitrow num"><span class="mono">${esc(v.unit || v.runner)}</span><span class="note">${esc(v.what)}</span><span class="r">${esc(t("times", fmt(v.runs)))}</span>

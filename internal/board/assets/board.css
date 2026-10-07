@@ -1,18 +1,18 @@
 :root {
-  --bg: #f5f6f8; --surface: #ffffff; --sunk: #eceef2; --fg: #1b1f27; --muted: #5a6270; --line: #d8dce3;
-  --accent: #2f4f8f; --accent-soft: #e3e9f5; --accent-2: #8fa6d3; --wire: #b9c1cf; --warn-bg: #fbe7eb; --warn-fg: #8a1232;
-  --own-ytif: #2f6f5a; --own-proj: #8a5a12;
-  --h-X: #c23b22; --h-P: #b5650d; --h-K: #7a3fc4; --h-L: #b3173f; --h-W: #1f6fa8; --h-B: #6b6560;
+  --bg: light-dark(#f5f6f8, #12151b); --surface: light-dark(#ffffff, #1a1e26); --sunk: light-dark(#eceef2, #232833);
+  --fg: light-dark(#1b1f27, #e5e8ee); --muted: light-dark(#5a6270, #9aa3b2); --line: light-dark(#d8dce3, #313847);
+  --accent: light-dark(#2f4f8f, #8fb0ee); --accent-soft: light-dark(#e3e9f5, #24304a); --accent-2: light-dark(#8fa6d3, #4a5f8c);
+  --wire: light-dark(#b9c1cf, #475064); --warn-bg: light-dark(#fbe7eb, #3a1c25); --warn-fg: light-dark(#8a1232, #f3a3b6);
+  --own-ytif: light-dark(#2f6f5a, #6fc4a6); --own-proj: light-dark(#8a5a12, #e2b062);
+  --h-X: light-dark(#c23b22, #f07a62); --h-P: light-dark(#b5650d, #e7a14d); --h-K: light-dark(#7a3fc4, #b48cf0);
+  --h-L: light-dark(#b3173f, #f06b8c); --h-W: light-dark(#1f6fa8, #6cb6ea); --h-B: light-dark(#6b6560, #b2aca6);
   --font-body: "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  color-scheme: light;
+  color-scheme: light dark;
 }
-@media (prefers-color-scheme: dark) { :root {
-  --bg: #12151b; --surface: #1a1e26; --sunk: #232833; --fg: #e5e8ee; --muted: #9aa3b2; --line: #313847;
-  --accent: #8fb0ee; --accent-soft: #24304a; --accent-2: #4a5f8c; --wire: #475064; --warn-bg: #3a1c25; --warn-fg: #f3a3b6;
-  --own-ytif: #6fc4a6; --own-proj: #e2b062;
-  --h-X: #f07a62; --h-P: #e7a14d; --h-K: #b48cf0; --h-L: #f06b8c; --h-W: #6cb6ea; --h-B: #b2aca6;
-  color-scheme: dark } }
+/* data-theme overrides the system scheme; light-dark() follows color-scheme */
+:root[data-theme="light"] { color-scheme: light }
+:root[data-theme="dark"] { color-scheme: dark }
 
 * { box-sizing: border-box }
 html, body { margin: 0 }
@@ -43,7 +43,16 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; overflow-wrap: a
 .tabs a[aria-current="page"] { color: var(--fg); font-weight: 600; border-bottom-color: var(--accent) }
 .tabs .count { font-size: 12px; padding: 1px 8px; border-radius: 999px; background: var(--sunk); color: var(--muted) }
 .tabs a[aria-current="page"] .count { background: var(--accent-soft); color: var(--accent) }
-.lang { align-self: center; min-height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); cursor: pointer; font-size: 13px }
+.tools { align-self: center; display: flex; gap: 4px }
+.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round }
+.iconbtn { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; padding: 0; border: 1px solid transparent; border-radius: 8px; background: none; color: var(--muted); cursor: pointer }
+.iconbtn:hover, .iconbtn[aria-expanded="true"] { border-color: var(--line); background: var(--sunk); color: var(--fg) }
+.menuwrap { position: relative }
+.menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; min-width: 160px; padding: 4px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 10px 30px rgb(0 0 0 / 0.14) }
+.menu button { display: grid; grid-template-columns: 16px 1fr; gap: 8px; align-items: center; width: 100%; padding: 6px 10px; border: 0; border-radius: 6px; background: none; text-align: left; cursor: pointer; font-size: 13px }
+.menu button:hover, .menu button:focus-visible { background: var(--accent-soft) }
+.menu button .i { width: 16px; height: 16px; color: var(--accent); visibility: hidden }
+.menu button[aria-checked="true"] .i { visibility: visible }
 
 main { max-width: 1376px; margin: 0 auto; padding: 24px 32px 48px; display: flex; flex-direction: column; gap: 18px }
 .pagehead { display: flex; flex-wrap: wrap; gap: 6px 24px; align-items: baseline; justify-content: space-between }
@@ -151,7 +160,7 @@ input[type="search"] { flex: 1 1 320px; min-width: 0; padding: 0 12px }
 .stat span { font-size: 12px; color: var(--muted) }
 .stat b { font-size: 22px }
 .sechead { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between }
-.costrow { display: grid; grid-template-columns: minmax(0, 1fr) 60px 52px 220px 72px 140px; gap: 16px; align-items: center; padding: 12px 18px; border-top: 1px solid var(--line); color: inherit; text-decoration: none }
+.costrow { display: grid; grid-template-columns: minmax(0, 1fr) 60px 52px 320px 72px; gap: 16px; align-items: center; padding: 12px 18px; border-top: 1px solid var(--line); color: inherit; text-decoration: none }
 .costrow.head { background: var(--sunk); font-size: 12px; font-weight: 700; color: var(--muted); border-top: 0; padding-block: 10px }
 a.costrow:hover { background: var(--accent-soft) }
 .costrow .what { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 13px }
@@ -159,7 +168,8 @@ a.costrow:hover { background: var(--accent-soft) }
 .costrow .what span { font-family: var(--font-mono); font-size: 11px; color: var(--muted); overflow-wrap: anywhere }
 .total { display: flex; align-items: center; gap: 8px }
 .total em { width: 56px; text-align: right; font-style: normal; font-size: 13px }
-.legend { display: inline-flex; gap: 10px; margin-left: 6px }
+.tothead { display: flex; align-items: center; gap: 12px }
+.legend { display: inline-flex; gap: 10px; font-weight: 400 }
 .legend i { display: inline-block; width: 10px; height: 8px; border-radius: 2px; margin-right: 4px }
 .split { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start }
 .split > section { min-width: 0; display: flex; flex-direction: column; gap: 10px }
@@ -176,7 +186,8 @@ tr.first td { border-top: 1px solid var(--line) }
 
 @media (max-width: 760px) {
   .top { padding: 0 16px }
-  .tabs { margin-left: 0 }
+  .tabs { margin-left: 0; order: 1; flex-basis: 100% }
+  .brand { flex: 1 1 0; min-width: 0 }
   .tabs a { min-height: 48px }
   main { padding: 16px 16px 40px }
   .filters { max-width: none }

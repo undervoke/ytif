@@ -5,15 +5,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ytif board</title>
 <style>/*STYLE*/</style>
+<script>try { const v = JSON.parse(localStorage.getItem("ytif-board.theme")); if (v === "light" || v === "dark") document.documentElement.dataset.theme = v } catch {}</script>
 </head>
 <body>
+/*ICONS*/
 <header class="top">
   <a class="brand" href="#/checks">
     <span class="mark">yt</span>
     <span class="brand-text"><b>ytif board</b><small id="meta"></small></span>
   </a>
   <nav class="tabs" id="tabs" aria-label="Pages"></nav>
-  <button type="button" class="lang" id="lang"></button>
+  <div class="tools">
+    <button type="button" class="iconbtn" id="theme"><svg class="i"><use href="#i-monitor"/></svg></button>
+    <div class="menuwrap">
+      <button type="button" class="iconbtn" id="lang" aria-haspopup="menu" aria-expanded="false" aria-controls="langmenu"><svg class="i"><use href="#i-languages"/></svg></button>
+      <div class="menu" id="langmenu" role="menu" hidden></div>
+    </div>
+  </div>
 </header>
 <main id="page"></main>
 <script id="data" type="application/json">/*DATA*/</script>

@@ -194,7 +194,7 @@ func runBoard(args []string, stdout, stderr io.Writer) int {
 	if malformed > 0 {
 		fmt.Fprintf(stderr, "ytif: skipped %d malformed record lines\n", malformed)
 	}
-	html, err := board.Render(root, lines, time.Now())
+	html, err := board.Render(board.Assets, root, lines, time.Now())
 	if err != nil {
 		fmt.Fprintf(stderr, "ytif: %v\n", err)
 		return gate.ExitUsage

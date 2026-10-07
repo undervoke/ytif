@@ -4,8 +4,9 @@
 package board
 
 import (
-	_ "embed"
+	"embed"
 	"encoding/json"
+	"io/fs"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -16,22 +17,29 @@ import (
 	"github.com/undervoke/ytif/internal/record"
 )
 
-var (
-	//go:embed assets/board.html
-	page string
-	//go:embed assets/board.css
-	style string
-	//go:embed assets/board.js
-	script string
-)
+//go:embed assets
+var embedded embed.FS
+
+// Assets holds the page source the binary ships: board.html, board.css,
+// board.js, and icons.svg.
+var Assets, _ = fs.Sub(embedded, "assets")
 
 // DefaultPath is the board file inside the git common directory.
 func DefaultPath(commonDir string) string {
 	return filepath.Join(commonDir, "ytif", "board.html")
 }
 
-// Render builds the page from the inventory under root and the record lines.
-func Render(root string, lines []record.Line, now time.Time) ([]byte, error) {
+// Render builds the page from the assets, the inventory under root, and the
+// record lines.
+func Render(assets fs.FS, root string, lines []record.Line, now time.Time) ([]byte, error) {
+	src := map[string]string{}
+	for _, name := range []string{"board.html", "board.css", "board.js", "icons.svg"} {
+		b, err := fs.ReadFile(assets, name)
+		if err != nil {
+			return nil, err
+		}
+		src[name] = string(b)
+	}
 	inv, err := inventory.LoadInventory(root)
 	if err != nil {
 		return nil, err
@@ -41,7 +49,7 @@ func Render(root string, lines []record.Line, now time.Time) ([]byte, error) {
 		return nil, err
 	}
 	// json.Marshal escapes <, >, and &, so the data cannot close its script.
-	out := strings.NewReplacer("/*STYLE*/", style, "/*SCRIPT*/", script, "/*DATA*/", string(data)).Replace(page)
+	out := strings.NewReplacer("/*STYLE*/", src["board.css"], "/*SCRIPT*/", src["board.js"], "/*ICONS*/", src["icons.svg"], "/*DATA*/", string(data)).Replace(src["board.html"])
 	return []byte(out), nil
 }
 
@@ -90,6 +98,7 @@ type checkOut struct {
 	Requires   []string    `json:"requires"`
 	Ensures    []string    `json:"ensures"`
 	Accident   string      `json:"accident"`
+	Detection  string      `json:"detection"`
 	Impact     string      `json:"impact"`
 	DeleteWhen string      `json:"delete_when"`
 	Stats      *checkStats `json:"stats"`
@@ -146,7 +155,7 @@ func build(repo string, inv inventory.Inventory, lines []record.Line, now time.T
 		d.Checks = append(d.Checks, checkOut{
 			Key: k, Runner: e.Runner, Unit: e.Unit, Name: e.Name, Placement: e.Placement,
 			Tags: nonNil(e.Tags), Requires: refs(e.Requires), Ensures: refs(e.Ensures),
-			Accident: e.Accident, Impact: e.Impact, DeleteWhen: e.DeleteWhen, Stats: stats[k],
+			Accident: e.Accident, Detection: e.Detection, Impact: e.Impact, DeleteWhen: e.DeleteWhen, Stats: stats[k],
 		})
 	}
 	d.Invocations = invs
