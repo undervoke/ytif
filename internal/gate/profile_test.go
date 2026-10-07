@@ -538,6 +538,101 @@ func TestProfileGate(t *testing.T) {
 	})
 }
 
+// traceSource is a native source that records whether the gate started
+// it. A refused gate must leave both flags false: no native discovery
+// runs and no native process starts.
+type traceSource struct {
+	discovered *bool
+	ran        *bool
+}
+
+func (s traceSource) Runners() []string { return []string{"command"} }
+
+func (s traceSource) Discover(ctx context.Context, repo check.Repo) ([]check.Key, []check.Invocation, error) {
+	*s.discovered = true
+	return nil, nil, nil
+}
+
+func (s traceSource) Run(ctx context.Context, repo check.Repo, keys []check.Key, in check.Input) (check.Report, error) {
+	*s.ran = true
+	return check.Report{}, nil
+}
+
+// TestRequireProfileGate covers the require_profile guard: omitting
+// --profile in a repository whose execution list requires one refuses the
+// gate before any native source starts and records nothing, while the
+// named profile and repositories without the flag keep working.
+func TestRequireProfileGate(t *testing.T) {
+	ctx := context.Background()
+
+	requiring := func(t *testing.T) *fixture {
+		t.Helper()
+		f := newFixture(t)
+		write(t, f.root, "ytif-execution.yaml", `version: 1
+adapter:
+  command: [`+f.bin+`]
+  runners: [command, vitest-test]
+require_profile: true
+profiles:
+  node:
+    description: Node checks for hooks.
+`)
+		return f
+	}
+
+	t.Run("omitted profile starts no native process and records nothing", func(t *testing.T) {
+		f := requiring(t)
+		var discovered, ran bool
+		var stdout, stderr bytes.Buffer
+		records := filepath.Join(t.TempDir(), "records.jsonl")
+		exit := gate.Run(ctx, f.root, gate.Options{
+			Gate: "commit", Records: records,
+			Stdout: &stdout, Stderr: &stderr,
+			Sources: []check.Source{traceSource{&discovered, &ran}},
+			Config:  nil,
+		})
+		if exit != 2 || !strings.Contains(stderr.String(), "--profile") {
+			t.Fatalf("exit = %d; want a usage error naming --profile\n%s", exit, stderr.String())
+		}
+		if discovered || ran {
+			t.Fatalf("the refused gate started native work: discovered=%v ran=%v", discovered, ran)
+		}
+		if _, err := os.Stat(records); !os.IsNotExist(err) {
+			t.Fatalf("a refused gate must record nothing: stat = %v", err)
+		}
+	})
+
+	t.Run("named profile still runs", func(t *testing.T) {
+		f := requiring(t)
+		f.stageReply(t, allPass)
+		exit, stdout, _, lines := f.runProfile(t, ctx, "commit", nil)
+		if exit != 0 {
+			t.Fatalf("exit = %d\n%s", exit, stdout)
+		}
+		if results := resultLines(lines); len(results) != 2 {
+			t.Fatalf("records = %v", lines)
+		}
+	})
+
+	t.Run("a repository without the flag still reaches native discovery", func(t *testing.T) {
+		f := newFixture(t)
+		var discovered, ran bool
+		var stdout, stderr bytes.Buffer
+		exit := gate.Run(ctx, f.root, gate.Options{
+			Gate: "commit", Records: filepath.Join(t.TempDir(), "records.jsonl"),
+			Stdout: &stdout, Stderr: &stderr,
+			Sources: []check.Source{traceSource{&discovered, &ran}},
+			Config:  nil,
+		})
+		if strings.Contains(stderr.String(), "--profile") {
+			t.Fatalf("native execution refused without the flag:\n%s", stderr.String())
+		}
+		if !discovered {
+			t.Fatalf("exit = %d; native discovery never ran\n%s\n%s", exit, stdout.String(), stderr.String())
+		}
+	})
+}
+
 // TestListMachine covers the machine-readable list and the runner scope:
 // JSON carries contracts and structured findings, and --runners limits the
 // world without touching excluded runners.

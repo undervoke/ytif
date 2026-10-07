@@ -19,6 +19,15 @@ checks:
     impact: Gates refuse to start, or profiles run selections no description explains.
     delete_when: execution.Load no longer reads ytif-execution.yaml.
   - runner: go-test
+    unit: internal/gate
+    name: TestRequireProfileGate
+    placement: commit
+    tags: [user, mistake, misdirection, silent, manual]
+    accident: A gate runs without --profile in a repository whose execution list sets require_profile, so native sources invoke the checks' own runners directly.
+    detection: Runs an unprofiled gate in a require_profile fixture with a tracing native source, failing unless the gate exits usage naming --profile, starts no native process, and records nothing; reruns the named profile to pass and an unflagged repository to reach native discovery.
+    impact: Checks run outside the adapter's fixture ownership, locks, and timeouts.
+    delete_when: Execution lists no longer carry require_profile.
+  - runner: go-test
     unit: internal/adapter
     name: TestAdapterProtocol
     placement: commit

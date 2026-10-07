@@ -30,6 +30,11 @@ type Execution struct {
 	Version  int                `yaml:"version"`
 	Adapter  Adapter            `yaml:"adapter"`
 	Profiles map[string]Profile `yaml:"profiles,omitempty"`
+	// RequireProfile refuses unprofiled gates: native sources would run
+	// the checks outside the adapter's fixture ownership, locks, and
+	// timeouts. Missing means false, so repositories without owned
+	// fixtures keep native execution.
+	RequireProfile bool `yaml:"require_profile,omitempty"`
 }
 
 // Adapter is the external command the rail shells discovery and profile

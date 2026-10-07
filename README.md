@@ -215,6 +215,13 @@ parsed. Every result, skip, invocation, dispatch, and finding record
 carries the run's commit, worktree, and profile; skips are preserved as
 result lines with the `skip` outcome and no elapsed time.
 
+A repository whose tests need owned fixtures — databases, locks, or
+timeouts the native runners cannot provide — sets `require_profile: true`
+in `ytif-execution.yaml`. Unprofiled gates then refuse with a usage error
+naming `--profile` before any native discovery starts, instead of
+invoking native sources outside the adapter; `list` and `board` are
+unaffected.
+
 Full gates discover through the adapter alongside the native sources and
 run its checks like any other source; the adapter owns its declared
 runners, which must not collide with native ones. A profile gate skips

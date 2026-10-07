@@ -40,6 +40,21 @@ profiles:
 		if ex.Profiles["node"].Description != "Node checks for hooks." {
 			t.Fatalf("unexpected profiles: %+v", ex.Profiles)
 		}
+		if ex.RequireProfile {
+			t.Fatalf("RequireProfile = true; want false when the flag is absent")
+		}
+	})
+
+	t.Run("require_profile opts unprofiled gates out of native execution", func(t *testing.T) {
+		dir := t.TempDir()
+		write(t, dir, valid+"require_profile: true\n")
+		ex, err := execution.Load(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ex.RequireProfile {
+			t.Fatalf("RequireProfile = false; want true: %+v", ex)
+		}
 	})
 
 	cases := map[string]string{

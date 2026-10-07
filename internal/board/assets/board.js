@@ -327,7 +327,7 @@ function diagramPage(r) {
     branch("latest", esc(t("latest")), [
       `<div class="leaf text" data-wire="h-latest">${esc(statusText(c))}</div>`,
       ...(c.stats?.last_detail ? [`<div class="leaf text mono" data-wire="h-latest">${esc(c.stats.last_detail)}</div>`] : []),
-      `<div class="leaf kv" data-wire="h-latest"><b>${esc(t("prov"))}</b><span class="mono">${esc(provText(c))}</span></div>`,
+      ...(c.stats?.last_outcome ? [`<div class="leaf kv" data-wire="h-latest"><b>${esc(t("prov"))}</b><span class="mono">${esc(provText(c))}</span></div>`] : []),
     ]),
     branch("accident", esc(t("accident")), [`<div class="leaf text" data-wire="h-accident">${esc(c.accident)}</div>`]),
     branch("detection", esc(t("detection")), [`<div class="leaf text" data-wire="h-detection">${esc(c.detection)}</div>`]),

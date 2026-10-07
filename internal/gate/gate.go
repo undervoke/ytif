@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/undervoke/ytif/internal/check"
+	"github.com/undervoke/ytif/internal/execution"
 	"github.com/undervoke/ytif/internal/gitx"
 	"github.com/undervoke/ytif/internal/reconcile"
 	"github.com/undervoke/ytif/internal/record"
@@ -50,6 +51,10 @@ func Run(ctx context.Context, root string, o Options) int {
 	}
 	if o.Profile != "" {
 		return runProfile(ctx, root, o)
+	}
+	if err := requireProfile(root); err != nil {
+		fmt.Fprintf(o.Stderr, "ytif: %v\n", err)
+		return ExitUsage
 	}
 	s, err := NewSurvey(ctx, root, o.Sources, o.Config, o.Stderr, nil)
 	if err != nil {
@@ -98,6 +103,23 @@ func finish(ctx context.Context, o Options, root, scope string, run outcome, fin
 		return ExitUsage
 	}
 	return exit
+}
+
+// requireProfile refuses an unprofiled gate in a repository whose
+// execution list requires one. Native sources would invoke the checks'
+// own runners directly — for example dotnet.Source — bypassing the
+// adapter's fixture ownership, locks, and timeouts. It runs before
+// NewSurvey so no native discovery starts and nothing is recorded; named
+// profiles and repositories without the flag are unaffected.
+func requireProfile(root string) error {
+	ex, err := execution.Load(root)
+	if err != nil {
+		return err
+	}
+	if ex != nil && ex.RequireProfile {
+		return fmt.Errorf("%s sets require_profile: pass --profile NAME so the checks run through the adapter's fixture ownership, locks, and timeouts instead of native sources", execution.File)
+	}
+	return nil
 }
 
 func bindInput(root string, o Options, tracked []string) (check.Input, error) {
