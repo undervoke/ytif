@@ -1,6 +1,15 @@
 version: 2
 checks:
   - runner: go-test
+    unit: internal/runner/gotest
+    name: TestSourceReportsGoCacheReplay
+    placement: commit
+    tags: [mistake, misdirection, silent, manual]
+    accident: A result-mapping refactor labels replayed Go test events as newly executed passes.
+    detection: Discovers a temporary real Go module and runs its test twice through Source.Run, requiring a timed fresh pass followed by an untimed cached result.
+    impact: The board presents cache reuse as a fresh successful execution.
+    delete_when: Native Go result reporting is retired.
+  - runner: go-test
     unit: internal/execution
     name: TestExecutionLoad
     placement: commit

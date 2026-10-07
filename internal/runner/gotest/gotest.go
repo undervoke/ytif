@@ -300,6 +300,8 @@ func runPackage(ctx context.Context, repo check.Repo, mod, dir string, keys []ch
 			res := check.Result{Key: k, Outcome: check.Pass, Timed: !cached, Elapsed: time.Duration(o.elapsed * float64(time.Second)), Ended: o.ended}
 			if o.action == "fail" {
 				res.Outcome, res.Output = check.Fail, o.output.String()
+			} else if cached {
+				res.Outcome = check.Cached
 			}
 			rep.Results = append(rep.Results, res)
 		}
