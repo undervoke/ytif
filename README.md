@@ -14,13 +14,13 @@ Pin ytif per project, so hooks, CI, and every clone run the version the
 project's files were written for. In a Go module (Go 1.24 or later):
 
 ```sh
-go get -tool github.com/undervoke/ytif/cmd/ytif@v0.2.0
+go get -tool github.com/undervoke/ytif/cmd/ytif@v0.3.0
 ```
 
 `go.mod` and `go.sum` then hold the version, and `go tool ytif` runs it;
 read every `ytif` below as `go tool ytif`. Elsewhere, download a release
 archive and verify it against `SHA256SUMS`, or run
-`go run github.com/undervoke/ytif/cmd/ytif@v0.2.0`. The gates also need
+`go run github.com/undervoke/ytif/cmd/ytif@v0.3.0`. The gates also need
 the test runners the project uses.
 
 To adopt it, stage any new check files and run `ytif list`. Every
@@ -36,6 +36,7 @@ Checks are discovered, never registered by hand. A key is `runner:unit:name`:
 | Runner | Discovered from | Unit | Name |
 |---|---|---|---|
 | `go-verify` | `VerifyXxx` functions in `//go:build verification` files | package directory | function |
+| `node-verify` | exported `verifyXxx` functions in `*.verify.mjs` files | file | function |
 | `go-test` | `TestXxx`, `FuzzXxx`, examples with output | package directory | function |
 | `bun-test`, `node-test` | `*.test.*` files importing `bun:test` or `node:test` | file | `suite > test` |
 | `dotnet-test` | `.csproj` referencing `Microsoft.NET.Test.Sdk` | `.csproj` path | method |
@@ -51,8 +52,15 @@ func VerifyXxx(ctx context.Context, [files []string], [provided...], w io.Writer
 It writes findings as `path:line: message` and fails by returning an error;
 what a passing check writes is shown as its log, and `--report github` turns
 its findings into warnings. A check returning `(T, error)`
-provides `T` to checks of the same package that take it. Test names must be
-static; what ytif cannot list exactly fails discovery.
+provides `T` to checks of the same package that take it. A Node check is an
+exported function declaration that writes findings the same way and fails by
+throwing:
+
+```js
+export async function verifyXxx({ files, signal }, out) // out.write(text)
+```
+
+Test names must be static; what ytif cannot list exactly fails discovery.
 
 Discovery reads Git-tracked files only, so an untracked new test stays
 invisible until staged. `ytif list` and every gate discover all runners
@@ -66,6 +74,17 @@ and project fails discovery. A Vitest config's listing is cached in the git
 common directory by the tracked paths, the files under the config's
 directory, the lockfiles, and the listed test files; a test name computed
 from any other file refreshes only when one of those changes.
+
+What discovery and runs need generated or built first, the inventory
+declares as preparation. Every `ytif list` and gate runs each command in
+order from the repository root before discovery, and a failed command fails
+discovery of its runners:
+
+```yaml
+prepare:
+  - runners: [vitest-test]
+    run: [pnpm, exec, nx, run-many, -t, prepare]
+```
 
 ## The inventory
 
@@ -123,8 +142,11 @@ and a relation to a check outside the inventory are findings.
 | `ytif push` | commit, push | files changed by the pushed refs |
 | `ytif ci` | commit, push, ci | every tracked file |
 
-Placement alone selects the checks; the files are input for Go checks, not
-a filter on tests.
+Placement selects the checks; the files are input for verify checks, not a
+filter on tests. In an Nx workspace, `ytif ci --base REF` also leaves out the
+test checks of projects that the changes since REF do not affect; verify
+checks and tests outside every project still run. Something must still run
+`ytif ci` without `--base`, such as the push to the main branch.
 
 ```yaml
 # lefthook.yml
