@@ -32,6 +32,9 @@ import (
 const (
 	Bun  = "bun-test"
 	Node = "node-test"
+	// Foreign marks a test file that imports vitest or @playwright/test
+	// instead, which neither runner owns.
+	Foreign = "foreign"
 )
 
 // Separator joins a test's suite names and its own name into a key name.
@@ -120,6 +123,7 @@ func parseFile(root, unit string) (*file, string, error) {
 		}
 	}
 	var runners []string
+	foreign := false
 	for _, st := range ast.List {
 		imp, ok := st.(*js.ImportStmt)
 		if !ok {
@@ -131,6 +135,9 @@ func parseFile(root, unit string) (*file, string, error) {
 			runner = Bun
 		case "node:test":
 			runner = Node
+		case "vitest", "@playwright/test":
+			foreign = true
+			continue
 		default:
 			continue
 		}
@@ -160,6 +167,9 @@ func parseFile(root, unit string) (*file, string, error) {
 		}
 	}
 	switch {
+	case len(runners) == 0 && foreign:
+		// The Vitest or Playwright source owns this file.
+		return nil, Foreign, nil
 	case len(runners) == 0:
 		return nil, "", fmt.Errorf("%s: imports neither bun:test nor node:test", unit)
 	case slices.Contains(runners, Bun) && slices.Contains(runners, Node):

@@ -39,6 +39,8 @@ Checks are discovered, never registered by hand. A key is `runner:unit:name`:
 | `go-test` | `TestXxx`, `FuzzXxx`, examples with output | package directory | function |
 | `bun-test`, `node-test` | `*.test.*` files importing `bun:test` or `node:test` | file | `suite > test` |
 | `dotnet-test` | `.csproj` referencing `Microsoft.NET.Test.Sdk` | `.csproj` path | method |
+| `vitest-test` | `vitest list` of each `vitest.config.*`, or a `vite.config.*` that mentions vitest | test file | `suite > test` |
+| `playwright-test` | `playwright test --list` of each `playwright.config.*` | spec file | `describe > test` |
 
 A Go check uses only standard-library types:
 
@@ -55,6 +57,15 @@ static; what ytif cannot list exactly fails discovery.
 Discovery reads Git-tracked files only, so an untracked new test stays
 invisible until staged. `ytif list` and every gate discover all runners
 whatever the placement, and .NET discovery builds the test projects.
+
+Vitest and Playwright are listed by the project's own `node_modules/.bin`
+binary from each config's directory, so their discovery needs the
+dependencies installed and whatever the test files import built. A test
+that several projects run is one check, and a name repeated within one file
+and project fails discovery. A Vitest config's listing is cached in the git
+common directory by the tracked paths, the files under the config's
+directory, the lockfiles, and the listed test files; a test name computed
+from any other file refreshes only when one of those changes.
 
 ## The inventory
 

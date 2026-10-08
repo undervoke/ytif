@@ -8,6 +8,8 @@ import (
 	"github.com/undervoke/ytif/internal/runner/dotnet"
 	"github.com/undervoke/ytif/internal/runner/gotest"
 	"github.com/undervoke/ytif/internal/runner/jstest"
+	"github.com/undervoke/ytif/internal/runner/playwright"
+	"github.com/undervoke/ytif/internal/runner/vitest"
 )
 
 // sources lists every registration source the rail discovers and runs.
@@ -18,6 +20,8 @@ func sources() []check.Source {
 		&jstest.Source{Runner: jstest.Bun},
 		&jstest.Source{Runner: jstest.Node},
 		&dotnet.Source{},
+		&vitest.Source{},
+		&playwright.Source{},
 	}
 }
 
