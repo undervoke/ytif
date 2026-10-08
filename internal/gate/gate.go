@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/undervoke/ytif/internal/affected"
 	"github.com/undervoke/ytif/internal/check"
 	"github.com/undervoke/ytif/internal/gitx"
 	"github.com/undervoke/ytif/internal/reconcile"
@@ -25,6 +26,7 @@ const (
 // Options configures one gate run.
 type Options struct {
 	Gate    string    // commit, push, or ci
+	Base    string    // ci only: narrow test checks to projects changed since this ref
 	Report  string    // "" or "github"
 	Records string    // "" means <git-common-dir>/ytif/records.jsonl
 	Context string    // "" detects ci or local
@@ -47,6 +49,16 @@ func Run(ctx context.Context, root string, o Options) int {
 		fmt.Fprintf(o.Stderr, "ytif: unknown gate %q\n", o.Gate)
 		return ExitUsage
 	}
+	// A base that does not resolve is a usage error, found before any
+	// preparation or discovery starts.
+	var base string
+	if o.Base != "" {
+		var err error
+		if base, err = gitx.MergeBase(root, o.Base); err != nil {
+			fmt.Fprintf(o.Stderr, "ytif: --base %s: %v\n", o.Base, err)
+			return ExitUsage
+		}
+	}
 	s, err := NewSurvey(ctx, root, o.Sources, o.Config, o.Stderr)
 	if err != nil {
 		fmt.Fprintf(o.Stderr, "ytif: %v\n", err)
@@ -60,8 +72,14 @@ func Run(ctx context.Context, root string, o Options) int {
 		return ExitUsage
 	}
 	selected := selectKeys(s, o)
+	narrowed := ""
+	if base != "" {
+		var dropped int
+		selected, dropped = narrow(ctx, s, base, selected, o.Stderr)
+		narrowed = fmt.Sprintf(" · %d unaffected since %.12s", dropped, base)
+	}
 
-	fmt.Fprintf(o.Stdout, "ytif %s · %d selected · %s %d files\n", o.Gate, len(selected), in.Scope, len(in.Files))
+	fmt.Fprintf(o.Stdout, "ytif %s · %d selected%s · %s %d files\n", o.Gate, len(selected), narrowed, in.Scope, len(in.Files))
 
 	cancelledAt := make(chan time.Time, 1)
 	stop := context.AfterFunc(ctx, func() { cancelledAt <- time.Now() })
@@ -119,6 +137,34 @@ func selectKeys(s *Survey, o Options) []check.Key {
 		}
 	}
 	return keys
+}
+
+// testRunners are the runners whose unit holds a check's inputs. A verify
+// check's unit is only where it is written, so it is never narrowed.
+var testRunners = map[string]bool{
+	"go-test": true, "bun-test": true, "node-test": true,
+	"dotnet-test": true, "vitest-test": true, "playwright-test": true,
+}
+
+// narrow drops test checks whose unit belongs to a project the changes since
+// base do not affect. Without a graph it drops nothing and says why.
+func narrow(ctx context.Context, s *Survey, base string, keys []check.Key, log io.Writer) ([]check.Key, int) {
+	g, reason, invs, err := affected.Nx(ctx, s.Repo, base)
+	s.Listing = append(s.Listing, invs...)
+	if err != nil {
+		reason = err.Error()
+	}
+	if g == nil {
+		fmt.Fprintf(log, "ytif: nothing narrowed: %s\n", reason)
+		return keys, 0
+	}
+	var kept []check.Key
+	for _, k := range keys {
+		if !testRunners[k.Runner] || !g.Unaffected(k.Unit) {
+			kept = append(kept, k)
+		}
+	}
+	return kept, len(keys) - len(kept)
 }
 
 func ownedBy(s *Survey, src check.Source, keys []check.Key) []check.Key {

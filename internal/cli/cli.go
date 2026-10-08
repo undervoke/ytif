@@ -39,6 +39,7 @@ other:
 gate flags:
   --report github        emit GitHub Actions annotations
   --records PATH         append records to PATH instead of the git common dir
+  --base REF             ci only: narrow test checks to Nx projects affected since REF
 `
 
 // Run executes one command and returns its exit code.
@@ -78,6 +79,10 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, version strin
 
 func runGate(ctx context.Context, name string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs, report, records := gateFlags(name, stderr)
+	var base *string
+	if name == check.GateCI {
+		base = fs.String("base", "", "narrow test checks to projects changed since REF")
+	}
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return usageError(stderr, fs, "takes no arguments")
 	}
@@ -93,7 +98,7 @@ func runGate(ctx context.Context, name string, args []string, stdin io.Reader, s
 		refs = stdin
 	}
 	return gate.Run(ctx, root, gate.Options{
-		Gate: name, Report: *report, Records: *records, Stdin: refs,
+		Gate: name, Base: deref(base), Report: *report, Records: *records, Stdin: refs,
 		Stdout: stdout, Stderr: stderr, Sources: sources(), Config: configChecker(),
 	})
 }
@@ -265,6 +270,13 @@ func gateFlags(name string, stderr io.Writer) (*flag.FlagSet, *string, *string) 
 	report := fs.String("report", "", "annotation format: github")
 	records := fs.String("records", "", "append records to this file")
 	return fs, report, records
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 func repoRoot(stderr io.Writer) (string, int) {

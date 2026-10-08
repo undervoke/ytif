@@ -163,3 +163,12 @@ func git(dir string, stdin io.Reader, args ...string) ([]byte, error) {
 	}
 	return out, nil
 }
+
+// MergeBase returns the best common ancestor of ref and HEAD.
+func MergeBase(root, ref string) (string, error) {
+	out, err := git(root, nil, "merge-base", ref, "HEAD")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
