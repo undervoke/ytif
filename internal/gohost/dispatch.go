@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"go/format"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	"github.com/undervoke/ytif/internal/check"
+	"github.com/undervoke/ytif/internal/dispatch"
 	"github.com/undervoke/ytif/internal/proc"
 )
 
@@ -83,17 +83,6 @@ func (g *group) keys() []check.Key {
 	return keys
 }
 
-// event is one line of the dispatcher's results file. Fields are untagged;
-// JSON decoding matches them case-insensitively.
-type event struct {
-	I         int
-	Start     bool
-	Outcome   string
-	ElapsedNS int64
-	EndNS     int64 // Unix time of the outcome
-	Output    string
-}
-
 // run builds the group's dispatcher through an overlay, runs it from the
 // repository root, and reads its results file.
 func (g *group) run(ctx context.Context, repo check.Repo, in check.Input) check.Report {
@@ -128,35 +117,11 @@ func (g *group) run(ctx context.Context, repo check.Repo, in check.Input) check.
 	runErr := proc.Run(cmd)
 	elapsed = time.Since(start)
 
-	events, running, readErr := readEvents(results, len(g.funcs))
-	for _, e := range events {
-		r := check.Result{Key: g.funcs[e.I].Key, Outcome: check.Outcome(e.Outcome), Output: e.Output}
-		if e.EndNS != 0 {
-			r.Ended = time.Unix(0, e.EndNS)
-		}
-		if r.Outcome != check.Blocked {
-			r.Elapsed, r.Timed = time.Duration(e.ElapsedNS), true
-		}
-		rep.Results = append(rep.Results, r)
+	names := make([]string, len(g.funcs))
+	for i, f := range g.funcs {
+		names[i] = f.Name
 	}
-	// A check may end the process itself, even with status 0; the start
-	// event without a result names it.
-	exit := "exited"
-	if runErr != nil {
-		exit = runErr.Error()
-	}
-	switch {
-	case errors.Is(runErr, proc.ErrInterrupted):
-		err = runErr
-	case readErr != nil:
-		err = readErr
-	case running >= 0:
-		err = fmt.Errorf("dispatcher %s while running %s", exit, g.funcs[running].Name)
-	case len(events) < len(g.funcs):
-		err = fmt.Errorf("dispatcher %s after %d of %d checks", exit, len(events), len(g.funcs))
-	case runErr != nil:
-		err = fmt.Errorf("dispatcher %s", exit)
-	}
+	rep.Results, err = dispatch.Results(results, keys, names, runErr)
 	invocation("run", elapsed, err)
 	return rep
 }
@@ -210,43 +175,6 @@ func (g *group) build(ctx context.Context, repo check.Repo, name, work string) (
 		return "", elapsed, fmt.Errorf("go build: %w\n%s", err, strings.TrimSpace(out.String()))
 	}
 	return bin, elapsed, nil
-}
-
-// readEvents returns the finished events and the index of a check that
-// started without finishing, or -1.
-func readEvents(path string, n int) ([]event, int, error) {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, -1, nil
-	}
-	if err != nil {
-		return nil, -1, err
-	}
-	var done []event
-	running := -1
-	for _, line := range bytes.Split(data, []byte("\n")) {
-		if len(bytes.TrimSpace(line)) == 0 {
-			continue
-		}
-		var e event
-		if err := json.Unmarshal(line, &e); err != nil || e.I < 0 || e.I >= n {
-			return done, running, fmt.Errorf("dispatcher wrote an unreadable result line: %.200q", line)
-		}
-		if e.Start {
-			running = e.I
-			continue
-		}
-		switch check.Outcome(e.Outcome) {
-		case check.Pass, check.Fail, check.Blocked:
-		default:
-			return done, running, fmt.Errorf("dispatcher reported outcome %q", e.Outcome)
-		}
-		if e.I == running {
-			running = -1
-		}
-		done = append(done, e)
-	}
-	return done, running, nil
 }
 
 func shortHash(s string) string {

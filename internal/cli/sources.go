@@ -8,6 +8,7 @@ import (
 	"github.com/undervoke/ytif/internal/runner/dotnet"
 	"github.com/undervoke/ytif/internal/runner/gotest"
 	"github.com/undervoke/ytif/internal/runner/jstest"
+	"github.com/undervoke/ytif/internal/runner/nodeverify"
 	"github.com/undervoke/ytif/internal/runner/playwright"
 	"github.com/undervoke/ytif/internal/runner/vitest"
 )
@@ -19,6 +20,7 @@ func sources() []check.Source {
 		&gotest.Source{},
 		&jstest.Source{Runner: jstest.Bun},
 		&jstest.Source{Runner: jstest.Node},
+		&nodeverify.Source{},
 		&dotnet.Source{},
 		&vitest.Source{},
 		&playwright.Source{},
