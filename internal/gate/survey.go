@@ -4,14 +4,19 @@ package gate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/undervoke/ytif/internal/check"
 	"github.com/undervoke/ytif/internal/gitx"
 	"github.com/undervoke/ytif/internal/inventory"
+	"github.com/undervoke/ytif/internal/proc"
 	"github.com/undervoke/ytif/internal/reconcile"
 )
 
@@ -29,7 +34,7 @@ type Survey struct {
 	Owner     map[string]check.Source // runner → source
 	Keys      map[string][]check.Key  // runner → discovered keys
 	Failed    map[string]error        // runner → incomplete discovery
-	Listing   []check.Invocation      // processes discovery started
+	Listing   []check.Invocation      // processes preparation, discovery, and narrowing started
 	Result    reconcile.Result
 	Config    []reconcile.Finding // nil when gate configuration was not checked
 }
@@ -72,6 +77,10 @@ func NewSurvey(ctx context.Context, root string, sources []check.Source, config 
 			s.Owner[r] = src
 		}
 	}
+	if err := s.prepare(ctx); err != nil {
+		s.Close()
+		return nil, err
+	}
 	s.discover(ctx)
 	known := map[string]bool{}
 	for r := range s.Owner {
@@ -87,7 +96,39 @@ func NewSurvey(ctx context.Context, root string, sources []check.Source, config 
 	return s, nil
 }
 
-// discover runs every source's discovery concurrently.
+// prepare runs the inventory's preparation commands in order, before any
+// discovery. A failed command fails discovery of its runners, so the gate
+// fails as it does for any incomplete discovery.
+func (s *Survey) prepare(ctx context.Context) error {
+	for i, p := range s.Inventory.Prepare {
+		for _, r := range p.Runners {
+			if s.Owner[r] == nil {
+				return fmt.Errorf("%s: prepare[%d]: unknown runner %q", inventory.InventoryFile, i, r)
+			}
+		}
+	}
+	for _, p := range s.Inventory.Prepare {
+		command := strings.Join(p.Run, " ")
+		cmd := exec.CommandContext(ctx, p.Run[0], p.Run[1:]...)
+		cmd.Dir = s.Repo.Root
+		cmd.Stdout, cmd.Stderr = s.Repo.Log, s.Repo.Log
+		start := time.Now()
+		err := proc.Run(cmd)
+		s.Listing = append(s.Listing, check.Invocation{
+			Runner: strings.Join(p.Runners, ","), Unit: command, What: "prepare",
+			Elapsed: time.Since(start), Err: err, Interrupted: errors.Is(err, proc.ErrInterrupted),
+		})
+		if err != nil {
+			for _, r := range p.Runners {
+				s.Failed[r] = fmt.Errorf("prepare %s: %w", command, err)
+			}
+		}
+	}
+	return nil
+}
+
+// discover runs every source's discovery concurrently. A source whose
+// runners all failed preparation is not discovered.
 func (s *Survey) discover(ctx context.Context) {
 	type found struct {
 		keys []check.Key
@@ -97,6 +138,13 @@ func (s *Survey) discover(ctx context.Context) {
 	out := make([]found, len(s.Sources))
 	var wg sync.WaitGroup
 	for i, src := range s.Sources {
+		unprepared := true
+		for _, r := range src.Runners() {
+			unprepared = unprepared && s.Failed[r] != nil
+		}
+		if unprepared {
+			continue
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

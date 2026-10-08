@@ -29,7 +29,16 @@ const (
 type Inventory struct {
 	Version    int        `yaml:"version"`
 	Vocabulary Vocabulary `yaml:"vocabulary,omitempty"`
+	Prepare    []Prep     `yaml:"prepare,omitempty"`
 	Checks     []Entry    `yaml:"checks"`
+}
+
+// Prep is a command that produces what the named runners' discovery and
+// runs need, such as generated sources or built dependencies. It judges
+// nothing, so it carries no contract.
+type Prep struct {
+	Runners []string `yaml:"runners"`
+	Run     []string `yaml:"run"` // argv, run from the repository root
 }
 
 // Entry is one check's contract and placement. Tags describe the accident
@@ -117,6 +126,11 @@ func LoadInventory(root string) (Inventory, error) {
 	}
 	if err := inv.Vocabulary.validate(); err != nil {
 		return Inventory{}, fmt.Errorf("%s: vocabulary: %w", InventoryFile, err)
+	}
+	for i, p := range inv.Prepare {
+		if len(p.Runners) == 0 || len(p.Run) == 0 || p.Run[0] == "" {
+			return Inventory{}, fmt.Errorf("%s: prepare[%d]: set runners and run", InventoryFile, i)
+		}
 	}
 	return inv, nil
 }
