@@ -64,7 +64,9 @@ Test names must be static; what ytif cannot list exactly fails discovery.
 
 Discovery reads Git-tracked files only, so an untracked new test stays
 invisible until staged. `ytif list` and every gate discover all runners
-whatever the placement, and .NET discovery builds the test projects.
+whatever the placement, and .NET discovery builds the test projects. A .NET
+project whose discovered methods are all selected runs without a filter; a
+filter too long for one command line is split across several runs.
 
 Vitest and Playwright are listed by the project's own `node_modules/.bin`
 binary from each config's directory, so their discovery needs the

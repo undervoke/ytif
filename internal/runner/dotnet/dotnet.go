@@ -236,7 +236,7 @@ func method(fqn string) string {
 	return b.String()
 }
 
-// Run runs each project's selected methods in one dotnet test process.
+// Run runs each project's selected methods.
 func (s *Source) Run(ctx context.Context, repo check.Repo, keys []check.Key, in check.Input) (check.Report, error) {
 	byUnit := map[string][]check.Key{}
 	var units []string
@@ -264,41 +264,82 @@ var filterEscaper = strings.NewReplacer(`\`, `\\`, `(`, `\(`, `)`, `\)`, `&`, `\
 // that carries the filter: separators, quotes, and its own escapes.
 var msbuildEscaper = strings.NewReplacer(`%`, `%25`, `;`, `%3B`, `,`, `%2C`, `"`, `%22`)
 
-func (s *Source) runProject(ctx context.Context, repo check.Repo, unit string, keys []check.Key) check.Report {
-	// Select every listed row exactly: adapters differ in whether a row's
-	// name carries arguments, and contains-filters on arguments break some.
-	var clauses []string
-	for _, k := range keys {
-		rows := s.rows[k]
-		if len(rows) == 0 {
-			rows = []string{k.Name}
-		}
-		for _, row := range rows {
-			clauses = append(clauses, "FullyQualifiedName="+filterEscaper.Replace(row))
-		}
-	}
-	trx := filepath.Join(repo.Scratch, "dotnet", shortHash(unit)+".trx")
-	_ = os.MkdirAll(filepath.Dir(trx), 0o755)
-	filter := msbuildEscaper.Replace(strings.Join(clauses, "|"))
-	args := []string{filepath.Join(repo.Root, filepath.FromSlash(unit)), "--filter", filter, "--logger", "trx;LogFileName=" + trx}
-	if s.built[unit] {
-		args = append(args, "--no-build")
-	}
-	_, elapsed, runErr := run(ctx, repo.Root, "test", args...)
+// maxArgFilter bounds the filter one dotnet test invocation carries on its
+// command line: Windows limits a whole command line to 32,767 characters and
+// Linux one argument to 131,072 bytes.
+const maxArgFilter = 30000
 
-	inv := check.Invocation{Runner: Runner, Unit: unit, What: "run", Elapsed: elapsed, Keys: keys, Interrupted: errors.Is(runErr, proc.ErrInterrupted)}
-	if inv.Interrupted {
-		inv.Err = runErr
-		return check.Report{Invocations: []check.Invocation{inv}}
+// batch is one dotnet test invocation's share of a selection.
+type batch struct {
+	keys    []check.Key
+	clauses []string // MSBuild-escaped; none means every method
+}
+
+// runProject runs the selected methods of one project. A selection of every
+// discovered method needs no filter; a longer filter than maxArgFilter is
+// split across invocations, each with its own results file, so the project's
+// own settings apply to every run. A method whose rows span invocations gets
+// one outcome folded from all of them, and none unless each reported it.
+func (s *Source) runProject(ctx context.Context, repo check.Repo, unit string, keys []check.Key) check.Report {
+	base := filepath.Join(repo.Scratch, "dotnet", shortHash(unit))
+	_ = os.MkdirAll(filepath.Dir(base), 0o755)
+	batches := []batch{{keys: keys}}
+	if !s.selectsAll(unit, keys) {
+		batches = s.batches(keys)
 	}
-	methods, err := readTRX(trx)
-	if err != nil {
-		inv.Err = err
-		if runErr != nil {
-			inv.Err = fmt.Errorf("%v; %w", err, runErr)
+
+	type ran struct {
+		inv        check.Invocation
+		methods    map[string]*methodResult
+		runErr     error
+		unresolved bool // the invocation reported no result for some of its keys
+	}
+	runs := make([]ran, len(batches))
+	complete := map[check.Key]bool{}
+	for _, k := range keys {
+		complete[k] = true
+	}
+	merged := map[string]*methodResult{}
+	for i, b := range batches {
+		trx := base + ".trx"
+		if len(batches) > 1 {
+			trx = fmt.Sprintf("%s-%d.trx", base, i)
 		}
-		return check.Report{Invocations: []check.Invocation{inv}}
+		args := []string{filepath.Join(repo.Root, filepath.FromSlash(unit)), "--logger", "trx;LogFileName=" + trx}
+		if len(b.clauses) > 0 {
+			args = append(args, "--filter", strings.Join(b.clauses, "|"))
+		}
+		if s.built[unit] {
+			args = append(args, "--no-build")
+		}
+		_, elapsed, runErr := run(ctx, repo.Root, "test", args...)
+		r := ran{inv: check.Invocation{Runner: Runner, Unit: unit, What: "run", Elapsed: elapsed, Keys: b.keys, Interrupted: errors.Is(runErr, proc.ErrInterrupted)}, runErr: runErr}
+		if r.inv.Interrupted {
+			r.inv.Err = runErr
+		} else if methods, err := readTRX(trx); err != nil {
+			r.inv.Err = err
+			if runErr != nil {
+				r.inv.Err = fmt.Errorf("%v; %w", err, runErr)
+			}
+		} else {
+			r.methods = methods
+			for name, m := range methods {
+				if prev := merged[name]; prev != nil {
+					prev.add(m)
+				} else {
+					merged[name] = m
+				}
+			}
+		}
+		for _, k := range b.keys {
+			if r.inv.Err != nil || r.methods[k.Name] == nil {
+				complete[k] = false
+				r.unresolved = r.unresolved || r.inv.Err == nil
+			}
+		}
+		runs[i] = r
 	}
+
 	var rep check.Report
 	reported := map[string]bool{}
 	report := func(k check.Key, m *methodResult) {
@@ -312,46 +353,129 @@ func (s *Source) runProject(ctx context.Context, repo check.Repo, unit string, k
 			rep.Skipped = append(rep.Skipped, k)
 		}
 	}
-	unresolved := false
 	for _, k := range keys {
-		if m := methods[k.Name]; m != nil {
-			report(k, m)
-		} else {
-			unresolved = true
+		if complete[k] {
+			report(k, merged[k.Name])
 		}
 	}
 	// The filter may also have run methods it does not name; report the
-	// discovered ones, which are the selection's co-runs.
-	var unexpected []string
-	for _, name := range slices.Sorted(maps.Keys(methods)) {
-		if reported[name] {
+	// discovered ones, which are the selection's co-runs, once each.
+	for i := range runs {
+		r := &runs[i]
+		if r.inv.Err != nil {
+			rep.Invocations = append(rep.Invocations, r.inv)
 			continue
 		}
-		k := check.Key{Runner: Runner, Unit: unit, Name: name}
-		if _, discovered := s.rows[k]; discovered {
-			report(k, methods[name])
-			inv.Keys = append(inv.Keys, k)
-		} else if methods[name].failed {
-			unexpected = append(unexpected, name)
+		var unexpected []string
+		for _, name := range slices.Sorted(maps.Keys(r.methods)) {
+			k := check.Key{Runner: Runner, Unit: unit, Name: name}
+			_, discovered := s.rows[k]
+			switch {
+			case discovered && !reported[name] && !slices.Contains(keys, k):
+				report(k, merged[name])
+				r.inv.Keys = append(r.inv.Keys, k)
+			case !discovered && r.methods[name].failed:
+				unexpected = append(unexpected, name)
+			}
 		}
-	}
-	reportedFail := false
-	for _, r := range rep.Results {
-		reportedFail = reportedFail || r.Outcome == check.Fail
-	}
-	switch {
-	case unresolved:
-		inv.Err = errors.New("dotnet test reported no result for some selected methods")
-		if runErr != nil {
-			inv.Err = fmt.Errorf("%w: %v", inv.Err, runErr)
+		reportedFail := false
+		for _, k := range r.inv.Keys {
+			reportedFail = reportedFail || r.methods[k.Name] != nil && r.methods[k.Name].failed
 		}
-	case len(unexpected) > 0:
-		inv.Err = fmt.Errorf("dotnet test ran and failed methods it did not discover: %s", strings.Join(unexpected, ", "))
-	case runErr != nil && !reportedFail:
-		inv.Err = fmt.Errorf("dotnet test failed outside its tests: %w", runErr)
+		switch {
+		case r.unresolved:
+			r.inv.Err = errors.New("dotnet test reported no result for some selected methods")
+			if r.runErr != nil {
+				r.inv.Err = fmt.Errorf("%w: %v", r.inv.Err, r.runErr)
+			}
+		case len(unexpected) > 0:
+			r.inv.Err = fmt.Errorf("dotnet test ran and failed methods it did not discover: %s", strings.Join(unexpected, ", "))
+		case r.runErr != nil && !reportedFail:
+			r.inv.Err = fmt.Errorf("dotnet test failed outside its tests: %w", r.runErr)
+		}
+		rep.Invocations = append(rep.Invocations, r.inv)
 	}
-	rep.Invocations = append(rep.Invocations, inv)
 	return rep
+}
+
+// selectsAll reports whether keys hold every method discovered in unit.
+func (s *Source) selectsAll(unit string, keys []check.Key) bool {
+	n := 0
+	for k := range s.rows {
+		if k.Unit == unit {
+			n++
+		}
+	}
+	return n > 0 && n == len(keys)
+}
+
+// batches splits the filter of keys so that each batch fits maxArgFilter.
+// Methods whose names differ only in case stay in one batch, since a filter
+// naming one may run the others, unless together they exceed the bound; a
+// method's rows are split only then too.
+func (s *Source) batches(keys []check.Key) []batch {
+	var groups [][]check.Key
+	at := map[string]int{}
+	for _, k := range keys {
+		f := strings.ToLower(k.Name)
+		if i, ok := at[f]; ok {
+			groups[i] = append(groups[i], k)
+			continue
+		}
+		at[f] = len(groups)
+		groups = append(groups, []check.Key{k})
+	}
+	var out []batch
+	var cur batch
+	size := 0
+	flush := func() {
+		if len(cur.clauses) > 0 {
+			out = append(out, cur)
+		}
+		cur, size = batch{}, 0
+	}
+	for _, g := range groups {
+		clauses := make([][]string, len(g))
+		total := 0
+		for i, k := range g {
+			clauses[i] = s.clauses(k)
+			for _, c := range clauses[i] {
+				total += len(c) + 1 // and its separator
+			}
+		}
+		if size+total > maxArgFilter {
+			flush()
+		}
+		for i, k := range g {
+			for _, c := range clauses[i] {
+				if size > 0 && size+len(c)+1 > maxArgFilter {
+					flush()
+				}
+				if n := len(cur.keys); n == 0 || cur.keys[n-1] != k {
+					cur.keys = append(cur.keys, k)
+				}
+				cur.clauses = append(cur.clauses, c)
+				size += len(c) + 1
+			}
+		}
+	}
+	flush()
+	return out
+}
+
+// clauses selects every listed row of k exactly, MSBuild-escaped: adapters
+// differ in whether a row's name carries arguments, and contains-filters on
+// arguments break some.
+func (s *Source) clauses(k check.Key) []string {
+	rows := s.rows[k]
+	if len(rows) == 0 {
+		rows = []string{k.Name}
+	}
+	out := make([]string, len(rows))
+	for i, row := range rows {
+		out[i] = msbuildEscaper.Replace("FullyQualifiedName=" + filterEscaper.Replace(row))
+	}
+	return out
 }
 
 type methodResult struct {
@@ -360,6 +484,19 @@ type methodResult struct {
 	ended          time.Time // the last row's end; zero when any row's is unknown
 	unknownEnd     bool
 	output         strings.Builder
+}
+
+// add folds another invocation's rows of the same method into m.
+func (m *methodResult) add(o *methodResult) {
+	m.passed, m.failed = m.passed || o.passed, m.failed || o.failed
+	m.elapsed += o.elapsed
+	switch {
+	case m.unknownEnd || o.unknownEnd:
+		m.ended, m.unknownEnd = time.Time{}, true
+	case o.ended.After(m.ended):
+		m.ended = o.ended
+	}
+	m.output.WriteString(o.output.String())
 }
 
 type trxRun struct {
