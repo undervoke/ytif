@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/undervoke/ytif/internal/affected"
 	"github.com/undervoke/ytif/internal/check"
 	"github.com/undervoke/ytif/internal/gitx"
+	"github.com/undervoke/ytif/internal/proc"
 	"github.com/undervoke/ytif/internal/reconcile"
 	"github.com/undervoke/ytif/internal/record"
 )
@@ -27,6 +29,7 @@ const (
 type Options struct {
 	Gate    string    // commit, push, or ci
 	Base    string    // ci only: narrow test checks to projects changed since this ref
+	Jobs    int       // processes run at once; 0 means DefaultJobs
 	Report  string    // "" or "github"
 	Records string    // "" means <git-common-dir>/ytif/records.jsonl
 	Context string    // "" detects ci or local
@@ -36,6 +39,9 @@ type Options struct {
 	Sources []check.Source
 	Config  ConfigChecker
 }
+
+// DefaultJobs is how many processes a gate runs at once unless told.
+var DefaultJobs = runtime.NumCPU()
 
 // dispatchError is a selected check that produced no outcome.
 type dispatchError struct {
@@ -59,6 +65,11 @@ func Run(ctx context.Context, root string, o Options) int {
 			return ExitUsage
 		}
 	}
+	jobs := o.Jobs
+	if jobs == 0 {
+		jobs = DefaultJobs
+	}
+	ctx = proc.WithLimit(ctx, jobs)
 	s, err := NewSurvey(ctx, root, o.Sources, o.Config, o.Stderr)
 	if err != nil {
 		fmt.Fprintf(o.Stderr, "ytif: %v\n", err)
@@ -79,7 +90,7 @@ func Run(ctx context.Context, root string, o Options) int {
 		narrowed = fmt.Sprintf(" · %d unaffected since %.12s", dropped, base)
 	}
 
-	fmt.Fprintf(o.Stdout, "ytif %s · %d selected%s · %s %d files\n", o.Gate, len(selected), narrowed, in.Scope, len(in.Files))
+	fmt.Fprintf(o.Stdout, "ytif %s · %d selected%s · %s %d files · jobs %d\n", o.Gate, len(selected), narrowed, in.Scope, len(in.Files), jobs)
 
 	cancelledAt := make(chan time.Time, 1)
 	stop := context.AfterFunc(ctx, func() { cancelledAt <- time.Now() })

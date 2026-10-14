@@ -21,10 +21,29 @@ const grace = 10 * time.Second
 // interruption rather than its work.
 var ErrInterrupted = errors.New("interrupted")
 
-// Run starts cmd in its own process group, interrupts the group when cmd's
-// context is cancelled, and kills whatever remains of the group once cmd
-// exits. cmd runs without the hook repository's git location.
-func Run(cmd *exec.Cmd) error {
+type limitKey struct{}
+
+// WithLimit returns a context under which at most n processes started by
+// Run run at once.
+func WithLimit(ctx context.Context, n int) context.Context {
+	return context.WithValue(ctx, limitKey{}, make(chan struct{}, n))
+}
+
+// Run waits for a slot of ctx's limit, if it has one, then starts cmd in its
+// own process group, interrupts the group when cmd's context is cancelled,
+// and kills whatever remains of the group once cmd exits. The slot is held
+// until then. Elapsed counts from the slot, so waiting is not attributed to
+// cmd. cmd runs without the hook repository's git location.
+func Run(ctx context.Context, cmd *exec.Cmd) (time.Duration, error) {
+	if slots, ok := ctx.Value(limitKey{}).(chan struct{}); ok {
+		select {
+		case slots <- struct{}{}:
+			defer func() { <-slots }()
+		case <-ctx.Done():
+			return 0, fmt.Errorf("%w: %v", ErrInterrupted, ctx.Err())
+		}
+	}
+	start := time.Now()
 	isolate(cmd)
 	cmd.Env = withoutRepositoryEnv(cmd.Environ())
 	var cancelled atomic.Bool
@@ -37,16 +56,17 @@ func Run(cmd *exec.Cmd) error {
 	cmd.WaitDelay = grace
 	if err := cmd.Start(); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("%w: %v", ErrInterrupted, err)
+			return time.Since(start), fmt.Errorf("%w: %v", ErrInterrupted, err)
 		}
-		return err
+		return time.Since(start), err
 	}
 	err := cmd.Wait()
 	reap(cmd)
+	elapsed := time.Since(start)
 	if cancelled.Load() {
-		return fmt.Errorf("%w: %v", ErrInterrupted, err)
+		return elapsed, fmt.Errorf("%w: %v", ErrInterrupted, err)
 	}
-	return err
+	return elapsed, err
 }
 
 // repositoryEnv lists git's local environment variables (git rev-parse

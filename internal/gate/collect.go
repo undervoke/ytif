@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/undervoke/ytif/internal/check"
 )
@@ -18,29 +19,49 @@ type outcome struct {
 	problems []string        // failures no check outcome explains
 }
 
-// collect runs each source on its selected keys. A gate holds back a key
-// whose run would also run a check the gate does not select, since that
-// check's placement keeps it from this gate. A source's report is kept even
-// when it also returns an error; only reported outcomes for keys the run may
-// produce — the selected keys and the checks that necessarily run with them
-// — are accepted, each at most once and with a known outcome. Once the run
-// is interrupted, no further source starts.
+// collect runs the sources concurrently, each on its selected keys, and
+// returns once every source has finished; the outcomes keep source order. A
+// gate holds back a key whose run would also run a check the gate does not
+// select, since that check's placement keeps it from this gate. A source's
+// report is kept even when it also returns an error; only reported outcomes
+// for keys the run may produce — the selected keys and the checks that
+// necessarily run with them — are accepted, each at most once and with a
+// known outcome. Once the run is interrupted, no further source starts.
 func collect(ctx context.Context, s *Survey, selected []check.Key, in check.Input) outcome {
 	var out outcome
 	co := coRuns(s)
 	selected, out.dispatch = heldBack(selected, co)
 	allowed := allowedKeys(selected, co)
-	for _, src := range s.Sources {
-		if ctx.Err() != nil {
-			break
-		}
+	type run struct {
+		keys []check.Key
+		rep  check.Report
+		err  error
+	}
+	runs := make([]run, len(s.Sources))
+	var wg sync.WaitGroup
+	for i, src := range s.Sources {
 		keys := ownedBy(s, src, selected)
-		if len(keys) == 0 {
+		if len(keys) == 0 || ctx.Err() != nil {
+			continue
+		}
+		runs[i].keys = keys
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			repo, flush := s.repoFor(src)
+			defer flush()
+			runs[i].rep, runs[i].err = src.Run(ctx, repo, keys, in)
+		}()
+	}
+	wg.Wait()
+
+	for i, src := range s.Sources {
+		keys, err := runs[i].keys, runs[i].err
+		if keys == nil {
 			continue
 		}
 		name := strings.Join(src.Runners(), ", ")
-		rep, err := src.Run(ctx, s.Repo, keys, in)
-		rep, rejected, problems := validate(rep, name, src, s, keys, allowed)
+		rep, rejected, problems := validate(runs[i].rep, name, src, s, keys, allowed)
 		out.problems = append(out.problems, problems...)
 		out.reports = append(out.reports, rep)
 

@@ -148,6 +148,18 @@ test checks of projects that the changes since REF do not affect; verify
 checks and tests outside every project still run. Something must still run
 `ytif ci` without `--base`, such as the push to the main branch.
 
+The runners of a gate run at once, and `--jobs N` (default: the CPU count)
+bounds how many processes ytif runs together while discovering and running
+checks: test processes, builds, listings, and dispatchers. Preparation and
+`--base` narrowing run alone, before and after discovery; `go env`,
+`go mod edit`, and git run outside the bound. Parallelism inside a process,
+such as a test framework's workers, stays the project's configuration.
+Checks that may run together must not share ports, build outputs, or
+temporary paths. Output a check passes through is printed a line at a time,
+prefixed with `[runner]`; results print in runner order once every runner
+has finished. One CI job running `ytif ci` does the work of a job per
+runner without repeating the checkout and setup.
+
 ```yaml
 # lefthook.yml
 pre-commit:
@@ -167,7 +179,7 @@ steps:
   - uses: actions/setup-go@v7
     with:
       go-version-file: go.mod
-  - run: go tool ytif ci --report github --records ytif-records.jsonl
+  - run: go tool ytif ci --jobs 2 --report github --records ytif-records.jsonl
   - if: always()
     uses: actions/upload-artifact@v7
     with:

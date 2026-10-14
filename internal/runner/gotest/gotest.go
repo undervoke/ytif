@@ -36,10 +36,6 @@ import (
 
 const Runner = "go-test"
 
-// parallel bounds concurrent go test processes; each also parallelizes its
-// own build.
-const parallel = 4
-
 // Source is the go test runner. Discover records each package's module root.
 type Source struct {
 	modules map[string]string // package dir → module root
@@ -201,7 +197,6 @@ func (s *Source) Run(ctx context.Context, repo check.Repo, keys []check.Key, in 
 	sort.Strings(units)
 
 	reports := make([]check.Report, len(units))
-	sem := make(chan struct{}, parallel)
 	var wg sync.WaitGroup
 	for i, unit := range units {
 		mod, ok := s.modules[unit]
@@ -211,8 +206,6 @@ func (s *Source) Run(ctx context.Context, repo check.Repo, keys []check.Key, in 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
 			reports[i] = runPackage(ctx, repo, mod, unit, byUnit[unit])
 		}()
 	}
@@ -246,9 +239,7 @@ func runPackage(ctx context.Context, repo check.Repo, mod, dir string, keys []ch
 	cmd.Dir = filepath.Join(repo.Root, filepath.FromSlash(mod))
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	start := time.Now()
-	waitErr := proc.Run(cmd)
-	elapsed := time.Since(start)
+	elapsed, waitErr := proc.Run(ctx, cmd)
 
 	type outcome struct {
 		action  string

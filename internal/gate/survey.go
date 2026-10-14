@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/undervoke/ytif/internal/check"
 	"github.com/undervoke/ytif/internal/gitx"
@@ -37,6 +36,8 @@ type Survey struct {
 	Listing   []check.Invocation      // processes preparation, discovery, and narrowing started
 	Result    reconcile.Result
 	Config    []reconcile.Finding // nil when gate configuration was not checked
+
+	logMu sync.Mutex // serializes the sources' writes to Repo.Log
 }
 
 // NewSurvey discovers every source's checks and reconciles them with the
@@ -112,11 +113,10 @@ func (s *Survey) prepare(ctx context.Context) error {
 		cmd := exec.CommandContext(ctx, p.Run[0], p.Run[1:]...)
 		cmd.Dir = s.Repo.Root
 		cmd.Stdout, cmd.Stderr = s.Repo.Log, s.Repo.Log
-		start := time.Now()
-		err := proc.Run(cmd)
+		elapsed, err := proc.Run(ctx, cmd)
 		s.Listing = append(s.Listing, check.Invocation{
 			Runner: strings.Join(p.Runners, ","), Unit: command, What: "prepare",
-			Elapsed: time.Since(start), Err: err, Interrupted: errors.Is(err, proc.ErrInterrupted),
+			Elapsed: elapsed, Err: err, Interrupted: errors.Is(err, proc.ErrInterrupted),
 		})
 		if err != nil {
 			for _, r := range p.Runners {
@@ -148,7 +148,9 @@ func (s *Survey) discover(ctx context.Context) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			keys, invs, err := src.Discover(ctx, s.Repo)
+			repo, flush := s.repoFor(src)
+			defer flush()
+			keys, invs, err := src.Discover(ctx, repo)
 			out[i] = found{keys, invs, err}
 		}()
 	}
@@ -169,6 +171,15 @@ func (s *Survey) discover(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// repoFor returns the repository as src sees it while other sources run:
+// its log lines carry src's runners. flush writes what src left of a line.
+func (s *Survey) repoFor(src check.Source) (check.Repo, func()) {
+	t := &tagged{mu: &s.logMu, dst: s.Repo.Log, prefix: []byte("[" + strings.Join(src.Runners(), ",") + "] ")}
+	repo := s.Repo
+	repo.Log = t
+	return repo, t.flush
 }
 
 // placementOrder reports managed checks that necessarily run a managed

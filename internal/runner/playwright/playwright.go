@@ -173,9 +173,8 @@ func invoke(ctx context.Context, repo check.Repo, file, what string, args ...str
 	cmd.Env = append(os.Environ(), "PLAYWRIGHT_JSON_OUTPUT_FILE="+out, "NO_COLOR=1", "FORCE_COLOR=0")
 	var console bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &console, &console
-	start := time.Now()
-	runErr := proc.Run(cmd)
-	inv.Elapsed, inv.Interrupted = time.Since(start), errors.Is(runErr, proc.ErrInterrupted)
+	elapsed, runErr := proc.Run(ctx, cmd)
+	inv.Elapsed, inv.Interrupted = elapsed, errors.Is(runErr, proc.ErrInterrupted)
 	var r report
 	data, err := os.ReadFile(out)
 	if err == nil {

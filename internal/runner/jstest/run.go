@@ -24,8 +24,6 @@ import (
 	"github.com/undervoke/ytif/internal/proc"
 )
 
-const parallel = 4
-
 // Source runs the test files of one runner, Bun or Node. Discover keeps
 // each file's tree for Run.
 type Source struct {
@@ -79,7 +77,6 @@ func (s *Source) Run(ctx context.Context, repo check.Repo, keys []check.Key, in 
 	sort.Strings(units)
 
 	reports := make([]check.Report, len(units))
-	sem := make(chan struct{}, parallel)
 	var wg sync.WaitGroup
 	for i, unit := range units {
 		f := s.files[unit]
@@ -89,8 +86,6 @@ func (s *Source) Run(ctx context.Context, repo check.Repo, keys []check.Key, in 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
 			reports[i] = runFile(ctx, repo, f, byUnit[unit])
 		}()
 	}
@@ -153,9 +148,7 @@ func runFile(ctx context.Context, repo check.Repo, f *file, keys []check.Key) ch
 	cmd.Env = append(os.Environ(), "NO_COLOR=1", "FORCE_COLOR=0")
 	var console bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &console, &console
-	start := time.Now()
-	runErr := proc.Run(cmd)
-	elapsed := time.Since(start)
+	elapsed, runErr := proc.Run(ctx, cmd)
 
 	var results map[string]*outcome
 	var readErr error

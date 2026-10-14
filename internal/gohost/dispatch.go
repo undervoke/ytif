@@ -113,9 +113,7 @@ func (g *group) run(ctx context.Context, repo check.Repo, in check.Input) check.
 	cmd.Dir = repo.Root
 	cmd.Stdin = bytes.NewReader(req)
 	cmd.Stdout, cmd.Stderr = repo.Log, repo.Log
-	start := time.Now()
-	runErr := proc.Run(cmd)
-	elapsed = time.Since(start)
+	elapsed, runErr := proc.Run(ctx, cmd)
 
 	names := make([]string, len(g.funcs))
 	for i, f := range g.funcs {
@@ -168,9 +166,7 @@ func (g *group) build(ctx context.Context, repo check.Repo, name, work string) (
 	cmd.Env = append(cmd.Environ(), "GOWORK=off")
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
-	start := time.Now()
-	err = proc.Run(cmd)
-	elapsed := time.Since(start)
+	elapsed, err := proc.Run(ctx, cmd)
 	if err != nil {
 		return "", elapsed, fmt.Errorf("go build: %w\n%s", err, strings.TrimSpace(out.String()))
 	}

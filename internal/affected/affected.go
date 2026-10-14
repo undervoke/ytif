@@ -16,7 +16,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/undervoke/ytif/internal/check"
 	"github.com/undervoke/ytif/internal/proc"
@@ -58,15 +57,14 @@ func Nx(ctx context.Context, repo check.Repo, base string) (*Graph, string, []ch
 		cmd.Dir = repo.Root
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
-		start := time.Now()
-		err := proc.Run(cmd)
+		elapsed, err := proc.Run(ctx, cmd)
 		if err != nil {
 			err = fmt.Errorf("nx %s: %w\n%s", label, err, strings.TrimSpace(stderr.String()))
 		}
 		// The gate reports a failure here itself, so the invocation
 		// records only its cost.
 		invs = append(invs, check.Invocation{Runner: "nx", Unit: label, What: "affected",
-			Elapsed: time.Since(start), Interrupted: errors.Is(err, proc.ErrInterrupted)})
+			Elapsed: elapsed, Interrupted: errors.Is(err, proc.ErrInterrupted)})
 		return stdout.Bytes(), err
 	}
 

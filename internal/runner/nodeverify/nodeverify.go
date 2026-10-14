@@ -235,9 +235,7 @@ func (*Source) Run(ctx context.Context, repo check.Repo, keys []check.Key, in ch
 	cmd.Dir = repo.Root
 	cmd.Stdin = bytes.NewReader(body)
 	cmd.Stdout, cmd.Stderr = repo.Log, repo.Log
-	start := time.Now()
-	runErr := proc.Run(cmd)
-	elapsed := time.Since(start)
+	elapsed, runErr := proc.Run(ctx, cmd)
 	rep.Results, err = dispatch.Results(results, keys, names, runErr)
 	invocation(elapsed, err)
 	return rep, nil

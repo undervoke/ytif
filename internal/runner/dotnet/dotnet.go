@@ -450,9 +450,7 @@ func run(ctx context.Context, dir, verb string, args ...string) ([]byte, time.Du
 	cmd.Env = append(os.Environ(), "DOTNET_CLI_UI_LANGUAGE=en", "DOTNET_NOLOGO=1")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	start := time.Now()
-	err := proc.Run(cmd)
-	elapsed := time.Since(start)
+	elapsed, err := proc.Run(ctx, cmd)
 	if err != nil {
 		return stdout.Bytes(), elapsed, fmt.Errorf("dotnet %s: %w\n%s", verb, err, strings.TrimSpace(stderr.String()+"\n"+stdout.String()))
 	}

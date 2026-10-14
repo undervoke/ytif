@@ -91,14 +91,11 @@ func (s *Source) Discover(ctx context.Context, repo check.Repo) ([]check.Key, []
 	s.configs = make([]*config, len(files))
 	invs := make([]*check.Invocation, len(files))
 	lerrs := make([]error, len(files))
-	sem := make(chan struct{}, nodetool.Parallel)
 	var wg sync.WaitGroup
 	for i, f := range files {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
 			c := &config{file: f}
 			c.tests, invs[i], lerrs[i] = list(ctx, repo, f, cache)
 			s.configs[i] = c
@@ -198,9 +195,8 @@ func list(ctx context.Context, repo check.Repo, file, cache string) ([]test, *ch
 	cmd.Env = append(os.Environ(), "NO_COLOR=1", "FORCE_COLOR=0")
 	var console bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &console, &console
-	start := time.Now()
-	runErr := proc.Run(cmd)
-	inv := &check.Invocation{Runner: Runner, Unit: file, What: "list", Elapsed: time.Since(start), Interrupted: errors.Is(runErr, proc.ErrInterrupted)}
+	elapsed, runErr := proc.Run(ctx, cmd)
+	inv := &check.Invocation{Runner: Runner, Unit: file, What: "list", Elapsed: elapsed, Interrupted: errors.Is(runErr, proc.ErrInterrupted)}
 	if runErr != nil {
 		inv.Err = fmt.Errorf("vitest list: %v\n%s", runErr, strings.TrimSpace(console.String()))
 		return nil, inv, inv.Err
@@ -390,14 +386,11 @@ func (s *Source) Run(ctx context.Context, repo check.Repo, keys []check.Key, in 
 	sort.Slice(order, func(i, j int) bool { return order[i].file < order[j].file })
 
 	reports := make([]check.Report, len(order))
-	sem := make(chan struct{}, nodetool.Parallel)
 	var wg sync.WaitGroup
 	for i, c := range order {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
 			reports[i] = s.runConfig(ctx, repo, c, byConfig[c])
 		}()
 	}
@@ -458,9 +451,7 @@ func (s *Source) runConfig(ctx context.Context, repo check.Repo, c *config, keys
 	cmd.Env = append(os.Environ(), "NO_COLOR=1", "FORCE_COLOR=0")
 	var console bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &console, &console
-	start := time.Now()
-	runErr := proc.Run(cmd)
-	elapsed := time.Since(start)
+	elapsed, runErr := proc.Run(ctx, cmd)
 
 	tallies, fileErrs, readErr := readRun(repo.Root, report)
 	var rep check.Report

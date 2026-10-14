@@ -40,6 +40,7 @@ gate flags:
   --report github        emit GitHub Actions annotations
   --records PATH         append records to PATH instead of the git common dir
   --base REF             ci only: narrow test checks to Nx projects affected since REF
+  --jobs N               run at most N processes at once (default: CPU count)
 `
 
 // Run executes one command and returns its exit code.
@@ -79,6 +80,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, version strin
 
 func runGate(ctx context.Context, name string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs, report, records := gateFlags(name, stderr)
+	jobs := fs.Int("jobs", gate.DefaultJobs, "run at most N processes at once")
 	var base *string
 	if name == check.GateCI {
 		base = fs.String("base", "", "narrow test checks to projects changed since REF")
@@ -89,6 +91,9 @@ func runGate(ctx context.Context, name string, args []string, stdin io.Reader, s
 	if *report != "" && *report != "github" {
 		return usageError(stderr, fs, fmt.Sprintf("--report %q: want github", *report))
 	}
+	if *jobs < 1 {
+		return usageError(stderr, fs, fmt.Sprintf("--jobs %d: want 1 or more", *jobs))
+	}
 	root, code := repoRoot(stderr)
 	if code != 0 {
 		return code
@@ -98,7 +103,7 @@ func runGate(ctx context.Context, name string, args []string, stdin io.Reader, s
 		refs = stdin
 	}
 	return gate.Run(ctx, root, gate.Options{
-		Gate: name, Base: deref(base), Report: *report, Records: *records, Stdin: refs,
+		Gate: name, Base: deref(base), Jobs: *jobs, Report: *report, Records: *records, Stdin: refs,
 		Stdout: stdout, Stderr: stderr, Sources: sources(), Config: configChecker(),
 	})
 }

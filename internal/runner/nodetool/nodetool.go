@@ -18,9 +18,6 @@ import (
 	"github.com/undervoke/ytif/internal/check"
 )
 
-// Parallel bounds the configs listed or run at once.
-const Parallel = 4
-
 // Configs returns the tracked files whose base name match accepts, sorted.
 func Configs(tracked []string, match func(base string) bool) []string {
 	var out []string
