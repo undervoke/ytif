@@ -1,0 +1,50 @@
+---
+title: ytif · gate 실행 순서
+config:
+  look: handDrawn
+  handDrawnSeed: 5
+  theme: dark
+  themeVariables:
+    mainBkg: "#333333"
+    clusterBkg: "#242424"
+  themeCSS: |
+    small { display: inline-block; text-align: left; }
+  flowchart:
+    wrappingWidth: 300
+---
+%% Behavior authority: README.md (Gates, The inventory, gate-config paragraphs) and internal/gate (gate.go Run, survey.go NewSurvey, collect.go, present.go), internal/reconcile, internal/gateconf, internal/proc, internal/affected at main 5ce043d (v0.5.0 behavior).
+%% ytif list runs the same survey (list.go) and stops there.
+%% --jobs N bounds the processes ytif starts through proc.Run across preparation, discovery, narrowing and dispatch (gate.go:72); workers inside a started tool are the project's configuration. Preparation and narrowing run alone, before and after discovery.
+%% Findings do not short-circuit dispatch; a selected check whose run would also run an unselected check is held back without an outcome. The verdict fails on any finding, failed check, check without an outcome, invocation error, or run problem (present.go:107-109).
+%% Early errors (unknown gate, unresolved --base, unreadable inventory or exemptions, unreadable file scope) exit 2 without records; a records write failure also exits 2.
+%% Narrowing drops only test-runner checks whose unit lies in an Nx project the changes since the merge base do not affect; verify checks and units outside every project stay. Without nx.json or a graph, nothing is narrowed.
+flowchart TB
+  Base["--base 해석<br/><small>• ci --base 지정 시<br/>• merge-base<br/>• 실패면 exit 2</small>"]
+  subgraph Survey["survey · ytif list도 여기까지"]
+    Prepare["inventory prepare<br/><small>• 저장소 루트에서 순서대로<br/>• 실패한 명령은 그 runner의 탐색 실패</small>"]
+    Discover["탐색<br/><small>• 모든 runner 동시<br/>• gate와 무관<br/>• Git 추적 파일만</small>"]
+    Reconcile["inventory 대조<br/><small>• managed 검사: 발견되고 inventory에 있고 placement가 유효한 검사<br/>• 어긋남은 finding</small>"]
+    GateConf["gate-config<br/><small>• lefthook · .github/workflows의 step<br/>• ytif 호출 또는 면제 목록 일치<br/>• 테스트 runner 직접 실행은 면제 불가<br/>• 분류 불가 명령</small>"]
+    Prepare --> Discover --> Reconcile --> GateConf
+  end
+  Select["placement 누적 선택<br/><small>• managed 검사 중<br/>• commit ⊂ push ⊂ ci</small>"]
+  Narrow["--base 축소<br/><small>• ci --base 지정 시<br/>• test runner 검사만<br/>• Nx affected<br/>• graph 없으면 축소 없음</small>"]
+  Dispatch["실행<br/><small>• runner 동시<br/>• 결과는 runner 순서로 출력</small>"]
+  Verdict["판정<br/><small>finding · 실패 · 결과 없음 · 오류 중 하나라도 있으면 실패</small>"]
+  Records["records 기록<br/><small>쓰기 실패면 exit 2</small>"]
+  Jobs["--jobs N<br/><small>• proc.Run으로 동시에 띄우는 프로세스 수<br/>• prepare · 탐색 · 축소 · 실행에 공통<br/>• git · go env · go mod edit · 도구 내부 worker 제외</small>"]
+  subgraph Scope["gate별 파일 범위 · verify 검사의 입력 · 테스트 필터 아님"]
+    C["ytif commit<br/><small>staged 파일</small>"]
+    P["ytif push<br/><small>push된 ref가 바꾼 파일</small>"]
+    I["ytif ci<br/><small>추적 파일 전체</small>"]
+  end
+  Base --> Prepare
+  GateConf --> Select --> Narrow --> Dispatch --> Verdict --> Records
+  Reconcile -.->|finding| Verdict
+  GateConf -.->|finding| Verdict
+  Jobs -.- Survey
+  Jobs -.- Narrow
+  Jobs -.- Dispatch
+  Dispatch -.- Scope
+  classDef em fill:#173d25,stroke:#86efac
+  class Verdict em
