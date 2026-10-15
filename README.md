@@ -5,8 +5,9 @@
 `ytif` keeps every check a project owns — tests and custom checks — on one
 rail. Each check carries a contract that says why it exists and when to
 delete it, runs at the gate its cost earns, and leaves a record of what it
-cost. Checks without a contract, contracts without a check, and gate steps
-that run project code around the rail fail the gate.
+cost. Checks without a contract, contracts without a check, gate steps that
+run tests around the rail, and other gate steps that run code outside ytif
+without a stated reason fail the gate.
 
 ## Install
 
@@ -26,7 +27,7 @@ the test runners the project uses.
 To adopt it, stage any new check files and run `ytif list`. Every
 discovered check without a contract and every gate step that bypasses the
 rail is a finding, and the gates fail until none remain. Write the
-contracts and routing entries, wire the gates and the guard as below, and
+contracts and exemptions, wire the gates and the guard as below, and
 rerun `ytif list`.
 
 ## Checks
@@ -190,25 +191,39 @@ steps:
       if-no-files-found: ignore
 ```
 
-Its actions need routing entries. Annotations do not keep records; read a
+Its actions need exemptions. Annotations do not keep records; read a
 downloaded artifact with `ytif stats --records PATH`.
 
 Every command in lefthook and GitHub workflows must call `ytif` (directly,
-through `go tool ytif`, or through `go run` of its package) or be external
-code listed in `ytif-routing.yaml`. A `run` entry matches
-a step's whole text, and a `uses` entry the action's `owner/repo` without
-its ref. Project code cannot be routed; it runs through `ytif`.
+through `go tool ytif`, or through `go run` of its package) or be listed in
+`ytif-gate-exemptions.yaml` with the reason it runs outside ytif, whether
+it runs external code or the repository's own, such as an Nx build that
+publishes a cache. A `run` entry matches a step's whole text, and a `uses`
+entry the action's `owner/repo` without its ref. Test runners cannot be
+exempted: a step that runs `go test`, `bun test`, `node --test`,
+`dotnet test`, `vitest`, or `playwright test`, directly or through a
+package manager's exec, fails even when listed. Commands that run no tests
+can be listed: `vitest list`, `bench`, and `init`; vitest with only one of
+`--help`, `--version`, `--clearCache`, `--listTags`, or `--mergeReports`;
+playwright commands other than `test`; and `playwright test` with only
+`--list` or `--help`. Any other form counts as a test run. Lefthook scripts
+and local actions cannot be exempted either; call `ytif` from a run step
+instead.
 
 ```yaml
 version: 2
 entries:
   - surface: github-actions
     uses: actions/checkout
-    kind: infrastructure
+    reason: Fetches the repository.
   - surface: lefthook
     run: gofmt -l {staged_files}
-    kind: external-tool
+    reason: Formatting is judged by gofmt.
 ```
+
+An exemption matches the text of the step, not what that text runs: a
+script, package script, or Nx target that changes behind an unchanged step
+keeps its exemption, so review such changes as you would the step.
 
 `ytif list` shows checks and findings; `ytif stats` shows recorded time and
 hits, where a hit is a run of consecutive fails that a pass ends.

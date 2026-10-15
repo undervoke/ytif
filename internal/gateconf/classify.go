@@ -17,8 +17,9 @@ const (
 	neutral  class = iota // shell built-ins that run no code
 	rail                  // ytif itself
 	external              // code outside the repository
-	repoCode              // repository code, which must run through ytif
+	repoCode              // repository code, which runs outside ytif only when exempted
 	unknown               // a command whose execution cannot be resolved statically
+	testRun               // a test runner, which runs only through ytif
 )
 
 // neutralCommands run no code of their own; the scripts trap and eval run
@@ -121,7 +122,9 @@ func within(cmds []shellcmd.Command, sc scope) scope {
 	return sc
 }
 
-var severity = map[class]int{neutral: 0, rail: 0, external: 1, unknown: 2, repoCode: 3}
+// severity orders classes for a command that runs others: an unclassifiable
+// command outranks repository code, which an exemption could accept.
+var severity = map[class]int{neutral: 0, rail: 0, external: 1, repoCode: 2, unknown: 3, testRun: 4}
 
 // classify returns what cmd executes and, unless external, why.
 func (c *classifier) classify(cmd shellcmd.Command, sc scope) (class, string) {
@@ -135,7 +138,7 @@ func (c *classifier) classify(cmd shellcmd.Command, sc scope) (class, string) {
 		return rail, ""
 	}
 	if r := TestRunner(cmd); r != "" {
-		return repoCode, "runs " + r + " outside ytif"
+		return testRun, "runs " + r + " outside ytif"
 	}
 	name := cmd.Name()
 	if name == "" {
@@ -298,10 +301,10 @@ func (c *classifier) shell(cmd shellcmd.Command, sc scope) (class, string) {
 }
 
 // TestRunner returns the test runner cmd starts — "go test", "bun test",
-// "node --test", or "dotnet test" — directly or through a package manager's
-// exec, or "" for none. A command name known only by its last path element,
-// such as "$GOROOT/bin/go", counts by that element. The agent guard shares
-// this rule.
+// "node --test", "dotnet test", "vitest", or "playwright test" — directly or
+// through a package manager's exec, or "" for none. A command name known
+// only by its last path element, such as "$GOROOT/bin/go", counts by that
+// element. The agent guard shares this rule.
 func TestRunner(cmd shellcmd.Command) string {
 	name := cmd.NameBase()
 	switch name {
@@ -326,6 +329,14 @@ func TestRunner(cmd shellcmd.Command) string {
 		if i, ok := operand(cmd, 1, nil); ok && i < len(cmd.Args) && cmd.Args[i] == "test" {
 			return "dotnet test"
 		}
+	case "vitest":
+		if vitestRuns(cmd) {
+			return "vitest"
+		}
+	case "playwright":
+		if playwrightRuns(cmd) {
+			return "playwright test"
+		}
 	case "npx", "pnpx", "bunx":
 		return execRunner(cmd, 1)
 	case "npm", "pnpm", "yarn":
@@ -340,6 +351,64 @@ func TestRunner(cmd shellcmd.Command) string {
 		}
 	}
 	return ""
+}
+
+// vitestRuns reports whether a vitest command runs tests. It does not when
+// it names list, bench, or init right after vitest, or when its whole
+// argument list is one of vitest's documented forms that run no tests: help,
+// version, clearing the cache, listing tags, or merging reports. Every other
+// form counts as a run, since vitest's options can switch these modes off
+// again through values, negations, and repetitions.
+func vitestRuns(cmd shellcmd.Command) bool {
+	words, ok := wordsBeforeDashes(cmd)
+	switch {
+	case len(words) > 0 && (words[0] == "list" || words[0] == "bench" || words[0] == "init"):
+		return false
+	case !ok:
+		return true
+	case len(words) == 1:
+		switch w := words[0]; {
+		case w == "-h", w == "--help", w == "-v", w == "--version", w == "--clearCache",
+			w == "--listTags", w == "--listTags=json", w == "--mergeReports", strings.HasPrefix(w, "--mergeReports="):
+			return false
+		}
+	case len(words) == 2:
+		return words[0] != "--mergeReports" || strings.HasPrefix(words[1], "-")
+	}
+	return true
+}
+
+// playwrightRuns reports whether a playwright command runs tests: test,
+// unless its whole argument list asks only for help or the list of tests.
+// A command other than test never runs tests, and the top-level options take
+// no value, so only help and the version may come without a command.
+func playwrightRuns(cmd shellcmd.Command) bool {
+	words, ok := wordsBeforeDashes(cmd)
+	switch {
+	case len(words) > 0 && !strings.HasPrefix(words[0], "-"):
+		if words[0] != "test" {
+			return false
+		}
+		return !ok || len(words) != 2 || (words[1] != "--list" && words[1] != "--help" && words[1] != "-h")
+	case !ok:
+		return true
+	case len(words) == 0:
+		return false
+	}
+	return len(words) != 1 || (words[0] != "--version" && words[0] != "-V" && words[0] != "--help" && words[0] != "-h")
+}
+
+// wordsBeforeDashes returns cmd's literal arguments before --; ok is false
+// when an argument there is not literal or -- is present, since either may
+// hide a command or an option.
+func wordsBeforeDashes(cmd shellcmd.Command) (words []string, ok bool) {
+	for i := 1; i < len(cmd.Args); i++ {
+		if !cmd.Literal[i] || cmd.Args[i] == "--" {
+			return words, false
+		}
+		words = append(words, cmd.Args[i])
+	}
+	return words, true
 }
 
 // execRunner returns the test runner a package manager's exec starts: the

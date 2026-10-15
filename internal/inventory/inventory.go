@@ -1,8 +1,8 @@
-// Package inventory reads the contract ledger and the routing list.
+// Package inventory reads the contract ledger and the gate exemptions.
 //
 // The inventory records each check's contract and placement; it never
-// registers a check. The routing list classifies gate entries that execute
-// only external code and carries no contracts.
+// registers a check. The exemptions list the gate entries that run outside
+// ytif, each with the reason it is accepted, and carry no contracts.
 package inventory
 
 import (
@@ -20,9 +20,9 @@ import (
 )
 
 const (
-	InventoryFile = "ytif-inventory.yaml"
-	RoutingFile   = "ytif-routing.yaml"
-	version       = 2
+	InventoryFile  = "ytif-inventory.yaml"
+	ExemptionsFile = "ytif-gate-exemptions.yaml"
+	version        = 2
 )
 
 // Inventory is the contract ledger.
@@ -91,26 +91,26 @@ func (e Entry) MissingContract() []string {
 	return missing
 }
 
-// Routing classifies gate entries that execute only external code.
-type Routing struct {
-	Version int     `yaml:"version"`
-	Entries []Route `yaml:"entries"`
+// Exemptions lists the gate entries that run outside ytif.
+type Exemptions struct {
+	Version int         `yaml:"version"`
+	Entries []Exemption `yaml:"entries"`
 }
 
-// Route classifies one gate entry. Run matches a command exactly; Uses matches
-// a GitHub Actions reference without its @ref.
-type Route struct {
+// Exemption accepts one gate entry that runs outside ytif. Run matches a
+// command exactly; Uses matches a GitHub Actions reference without its @ref.
+// Reason says why the entry runs outside ytif; it is for review, and ytif
+// does not interpret it.
+type Exemption struct {
 	Surface string `yaml:"surface"`
 	Run     string `yaml:"run,omitempty"`
 	Uses    string `yaml:"uses,omitempty"`
-	Kind    string `yaml:"kind"`
+	Reason  string `yaml:"reason"`
 }
 
 const (
 	SurfaceLefthook      = "lefthook"
 	SurfaceGitHubActions = "github-actions"
-	KindExternalTool     = "external-tool"
-	KindInfrastructure   = "infrastructure"
 )
 
 // LoadInventory reads InventoryFile under root. A missing file is an empty
@@ -135,34 +135,33 @@ func LoadInventory(root string) (Inventory, error) {
 	return inv, nil
 }
 
-// LoadRouting reads RoutingFile under root. A missing file is an empty list.
-func LoadRouting(root string) (Routing, error) {
-	r := Routing{Version: version}
-	found, err := load(filepath.Join(root, RoutingFile), &r)
+// LoadExemptions reads ExemptionsFile under root. A missing file is an empty
+// list.
+func LoadExemptions(root string) (Exemptions, error) {
+	x := Exemptions{Version: version}
+	found, err := load(filepath.Join(root, ExemptionsFile), &x)
 	if err != nil || !found {
-		return Routing{Version: version}, err
+		return Exemptions{Version: version}, err
 	}
-	if r.Version != version {
-		return Routing{}, fmt.Errorf("%s: version %d, want %d", RoutingFile, r.Version, version)
+	if x.Version != version {
+		return Exemptions{}, fmt.Errorf("%s: version %d, want %d", ExemptionsFile, x.Version, version)
 	}
-	for i, e := range r.Entries {
+	for i, e := range x.Entries {
 		if err := e.validate(); err != nil {
-			return Routing{}, fmt.Errorf("%s: entries[%d]: %w", RoutingFile, i, err)
+			return Exemptions{}, fmt.Errorf("%s: entries[%d]: %w", ExemptionsFile, i, err)
 		}
 	}
-	return r, nil
+	return x, nil
 }
 
-func (e Route) validate() error {
+func (e Exemption) validate() error {
 	switch e.Surface {
 	case SurfaceLefthook, SurfaceGitHubActions:
 	default:
 		return fmt.Errorf("surface %q: want %s or %s", e.Surface, SurfaceLefthook, SurfaceGitHubActions)
 	}
-	switch e.Kind {
-	case KindExternalTool, KindInfrastructure:
-	default:
-		return fmt.Errorf("kind %q: want %s or %s", e.Kind, KindExternalTool, KindInfrastructure)
+	if strings.TrimSpace(e.Reason) == "" {
+		return errors.New("reason: state why this entry runs outside ytif")
 	}
 	if (e.Run == "") == (e.Uses == "") {
 		return errors.New("set exactly one of run or uses")

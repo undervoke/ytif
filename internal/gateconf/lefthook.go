@@ -113,7 +113,7 @@ func (r *lefthookReader) fail(loc, detail string) {
 }
 
 // run adds a command line lefthook runs with sh. Templates expand in run,
-// args, and setup commands; routing matches the text as written.
+// args, and setup commands; exemptions match the text as written.
 func (r *lefthookReader) run(loc, line string, sc scope, expand bool) {
 	if strings.TrimSpace(line) == "" {
 		return
@@ -122,7 +122,7 @@ func (r *lefthookReader) run(loc, line string, sc scope, expand bool) {
 	if expand {
 		script = r.expand(line)
 	}
-	r.entries = append(r.entries, entry{surface: inventory.SurfaceLefthook, location: loc, run: script, route: line, scope: sc})
+	r.entries = append(r.entries, entry{surface: inventory.SurfaceLefthook, location: loc, run: script, match: line, scope: sc})
 }
 
 // builtinTemplate matches lefthook's own replacements: file lists, the job

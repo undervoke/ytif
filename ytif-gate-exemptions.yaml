@@ -2,19 +2,19 @@ version: 2
 entries:
   - surface: github-actions
     uses: actions/checkout
-    kind: infrastructure
+    reason: Fetches the repository.
   - surface: github-actions
     uses: actions/setup-go
-    kind: infrastructure
+    reason: Installs the Go toolchain.
   - surface: github-actions
     uses: actions/upload-artifact
-    kind: infrastructure
+    reason: Uploads the gate records.
   - surface: github-actions
     run: test -z "$(gofmt -l .)"
-    kind: external-tool
+    reason: Formatting is judged by gofmt.
   - surface: github-actions
     run: go vet ./...
-    kind: external-tool
+    reason: Static analysis is judged by go vet.
   - surface: github-actions
     run: |
       set -euo pipefail
@@ -28,7 +28,7 @@ entries:
         tar -C dist -czf "dist/$name.tar.gz" "$name"
       done
       (cd dist && sha256sum ./*.tar.gz > SHA256SUMS)
-    kind: infrastructure
+    reason: Packages the release archives.
   - surface: github-actions
     run: gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS --title "$GITHUB_REF_NAME" --generate-notes
-    kind: infrastructure
+    reason: Publishes the release.

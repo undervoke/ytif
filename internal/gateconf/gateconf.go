@@ -1,9 +1,10 @@
 // Package gateconf reconciles gate configuration — lefthook hooks and GitHub
-// Actions workflows — with the rail: repository code runs only through
-// ytif, and every entry that runs only external code is classified in the
-// routing list. Entries that cannot be read or classified fail, routed or
-// not: routing classifies external code and never vouches for what cannot
-// be read.
+// Actions workflows — with the rail: test runners run only through ytif,
+// and every other entry that runs code outside ytif, external or from the
+// repository, is listed in the exemptions with its reason. Only run steps
+// and action references can be exempted; lefthook scripts and local actions
+// cannot. Entries that cannot be read or classified fail, exempted or not:
+// an exemption accepts an entry and never vouches for what cannot be read.
 package gateconf
 
 import (
@@ -28,7 +29,7 @@ type entry struct {
 	surface  string
 	location string
 	run      string // shell script, as the shell receives it
-	route    string // the text routing entries match; run when empty
+	match    string // the text exemptions match; run when empty
 	shell    string // workflow shell; "" means the default
 	scope    scope  // where the script runs
 	uses     string // GitHub Actions reference
@@ -36,7 +37,7 @@ type entry struct {
 	repoCode string // set for constructs such as lefthook scripts
 }
 
-func (Checker) Check(ctx context.Context, repo check.Repo, routing inventory.Routing) []reconcile.Finding {
+func (Checker) Check(ctx context.Context, repo check.Repo, exemptions inventory.Exemptions) []reconcile.Finding {
 	var entries []entry
 	var findings []reconcile.Finding
 	for _, src := range []func(check.Repo) ([]entry, []reconcile.Finding){lefthookEntries, workflowEntries} {
@@ -46,7 +47,7 @@ func (Checker) Check(ctx context.Context, repo check.Repo, routing inventory.Rou
 	}
 	c := newClassifier(repo.Root, repo.Tracked)
 	for _, e := range entries {
-		if detail := c.check(e, routing); detail != "" {
+		if detail := c.check(e, exemptions); detail != "" {
 			findings = append(findings, reconcile.Finding{Kind: reconcile.GateConfig, Location: e.location, Detail: detail})
 		}
 	}
@@ -54,12 +55,12 @@ func (Checker) Check(ctx context.Context, repo check.Repo, routing inventory.Rou
 }
 
 // check returns why an entry is not acceptable, or "".
-func (c *classifier) check(e entry, routing inventory.Routing) string {
+func (c *classifier) check(e entry, exemptions inventory.Exemptions) string {
 	if e.repoCode != "" {
 		return e.repoCode + "; call ytif instead"
 	}
 	if e.uses != "" {
-		return c.checkUses(e, routing)
+		return c.checkUses(e, exemptions)
 	}
 	if !shellSupported(e.shell) {
 		return fmt.Sprintf("shell %q cannot be read; use bash", e.shell)
@@ -73,35 +74,40 @@ func (c *classifier) check(e entry, routing inventory.Routing) string {
 	}
 	sc := within(cmds, e.scope)
 	var unknowns []string
-	sawExternal := false
+	outside, repo := false, ""
 	for _, cmd := range cmds {
 		cls, why := c.classify(cmd, sc)
 		switch cls {
-		case repoCode:
+		case testRun:
 			return fmt.Sprintf("%s (%s); call ytif instead", why, cmd.Text)
 		case unknown:
 			unknowns = append(unknowns, fmt.Sprintf("%s (%s)", why, cmd.Text))
+		case repoCode:
+			if repo == "" {
+				repo = " (" + why + ")"
+			}
+			outside = true
 		case external:
-			sawExternal = true
+			outside = true
 		}
 	}
 	switch {
 	case len(unknowns) > 0:
 		return "cannot classify " + strings.Join(unknowns, "; ")
-	case !sawExternal || routed(routing, e):
+	case !outside || exempted(exemptions, e):
 		return ""
 	}
-	return "runs external commands not listed in " + inventory.RoutingFile + ": " + oneLine(e.routeText())
+	return "runs commands outside ytif not listed in " + inventory.ExemptionsFile + repo + ": " + oneLine(e.matchText())
 }
 
-func (e entry) routeText() string {
-	if e.route != "" {
-		return e.route
+func (e entry) matchText() string {
+	if e.match != "" {
+		return e.match
 	}
 	return e.run
 }
 
-func (c *classifier) checkUses(e entry, routing inventory.Routing) string {
+func (c *classifier) checkUses(e entry, exemptions inventory.Exemptions) string {
 	ref := e.uses
 	if strings.HasPrefix(ref, "./") || strings.HasPrefix(ref, "../") {
 		if e.job {
@@ -109,23 +115,23 @@ func (c *classifier) checkUses(e entry, routing inventory.Routing) string {
 		}
 		return fmt.Sprintf("runs the local action %s; call ytif from a run step instead", ref)
 	}
-	if routed(routing, e) {
+	if exempted(exemptions, e) {
 		return ""
 	}
-	return fmt.Sprintf("uses %s, which is not listed in %s", usesKey(ref), inventory.RoutingFile)
+	return fmt.Sprintf("uses %s, which is not listed in %s", usesKey(ref), inventory.ExemptionsFile)
 }
 
-// routed reports whether the routing list classifies the entry: a run entry
-// by its exact text, a uses entry by owner/repo without the ref.
-func routed(routing inventory.Routing, e entry) bool {
-	for _, r := range routing.Entries {
+// exempted reports whether the exemptions list the entry: a run entry by its
+// exact text, a uses entry by owner/repo without the ref.
+func exempted(exemptions inventory.Exemptions, e entry) bool {
+	for _, r := range exemptions.Entries {
 		if r.Surface != e.surface {
 			continue
 		}
 		if e.uses != "" && r.Uses != "" && r.Uses == usesKey(e.uses) {
 			return true
 		}
-		if e.uses == "" && r.Run != "" && strings.TrimSpace(r.Run) == strings.TrimSpace(e.routeText()) {
+		if e.uses == "" && r.Run != "" && strings.TrimSpace(r.Run) == strings.TrimSpace(e.matchText()) {
 			return true
 		}
 	}

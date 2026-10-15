@@ -21,28 +21,28 @@ import (
 
 // ConfigChecker reconciles gate configuration (lefthook, CI) with the rail.
 type ConfigChecker interface {
-	Check(ctx context.Context, repo check.Repo, routing inventory.Routing) []reconcile.Finding
+	Check(ctx context.Context, repo check.Repo, exemptions inventory.Exemptions) []reconcile.Finding
 }
 
 // Survey is a repository's discovered checks and their reconciliation.
 type Survey struct {
-	Repo      check.Repo
-	Inventory inventory.Inventory
-	Routing   inventory.Routing
-	Sources   []check.Source
-	Owner     map[string]check.Source // runner → source
-	Keys      map[string][]check.Key  // runner → discovered keys
-	Failed    map[string]error        // runner → incomplete discovery
-	Listing   []check.Invocation      // processes preparation, discovery, and narrowing started
-	Result    reconcile.Result
-	Config    []reconcile.Finding // nil when gate configuration was not checked
+	Repo       check.Repo
+	Inventory  inventory.Inventory
+	Exemptions inventory.Exemptions
+	Sources    []check.Source
+	Owner      map[string]check.Source // runner → source
+	Keys       map[string][]check.Key  // runner → discovered keys
+	Failed     map[string]error        // runner → incomplete discovery
+	Listing    []check.Invocation      // processes preparation, discovery, and narrowing started
+	Result     reconcile.Result
+	Config     []reconcile.Finding // nil when gate configuration was not checked
 
 	logMu sync.Mutex // serializes the sources' writes to Repo.Log
 }
 
 // NewSurvey discovers every source's checks and reconciles them with the
 // inventory and, when config is set, the gate configuration. An error means
-// the inventory or routing list cannot be read. Close removes the scratch
+// the inventory or the exemptions cannot be read. Close removes the scratch
 // directory.
 func NewSurvey(ctx context.Context, root string, sources []check.Source, config ConfigChecker, log io.Writer) (*Survey, error) {
 	tracked, err := gitx.Tracked(root)
@@ -53,7 +53,7 @@ func NewSurvey(ctx context.Context, root string, sources []check.Source, config 
 	if err != nil {
 		return nil, err
 	}
-	routing, err := inventory.LoadRouting(root)
+	exemptions, err := inventory.LoadExemptions(root)
 	if err != nil {
 		return nil, err
 	}
@@ -62,13 +62,13 @@ func NewSurvey(ctx context.Context, root string, sources []check.Source, config 
 		return nil, err
 	}
 	s := &Survey{
-		Repo:      check.Repo{Root: root, Tracked: tracked, Scratch: scratch, Log: log},
-		Inventory: inv,
-		Routing:   routing,
-		Sources:   sources,
-		Owner:     map[string]check.Source{},
-		Keys:      map[string][]check.Key{},
-		Failed:    map[string]error{},
+		Repo:       check.Repo{Root: root, Tracked: tracked, Scratch: scratch, Log: log},
+		Inventory:  inv,
+		Exemptions: exemptions,
+		Sources:    sources,
+		Owner:      map[string]check.Source{},
+		Keys:       map[string][]check.Key{},
+		Failed:     map[string]error{},
 	}
 	for _, src := range sources {
 		for _, r := range src.Runners() {
@@ -91,7 +91,7 @@ func NewSurvey(ctx context.Context, root string, sources []check.Source, config 
 	s.Result.Findings = append(s.Result.Findings, s.placementOrder()...)
 	reconcile.Sort(s.Result.Findings)
 	if config != nil {
-		s.Config = config.Check(ctx, s.Repo, routing)
+		s.Config = config.Check(ctx, s.Repo, exemptions)
 		reconcile.Sort(s.Config)
 	}
 	return s, nil
