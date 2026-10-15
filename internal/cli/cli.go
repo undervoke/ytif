@@ -18,6 +18,7 @@ import (
 	"github.com/undervoke/ytif/internal/gate"
 	"github.com/undervoke/ytif/internal/gitx"
 	"github.com/undervoke/ytif/internal/guard"
+	"github.com/undervoke/ytif/internal/launch"
 	"github.com/undervoke/ytif/internal/record"
 )
 
@@ -34,7 +35,11 @@ other:
   board [--out PATH]     write the inventory board as one HTML file and open it
   guard                  agent PreToolUse hook: refuse agent test runs
   allow [DURATION|--off] let agents run checks themselves for DURATION
+  update                 replace the ytif on PATH with the latest release
   version                print the version
+
+Inside a Go module that pins ytif as a tool, every command but update runs
+the pinned version.
 
 gate flags:
   --report github        emit GitHub Actions annotations
@@ -67,6 +72,12 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, version strin
 		return gate.ExitPass
 	case "allow":
 		return runAllow(rest, stdout, stderr)
+	case "update":
+		if len(rest) != 0 {
+			fmt.Fprintf(stderr, "ytif update: takes no arguments\n%s", usageText)
+			return gate.ExitUsage
+		}
+		return launch.Update(stdout, stderr, version)
 	case "version", "--version":
 		fmt.Fprintln(stdout, version)
 		return gate.ExitPass

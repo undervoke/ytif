@@ -24,6 +24,14 @@ archive and verify it against `SHA256SUMS`, or run
 `go run github.com/undervoke/ytif/cmd/ytif@v0.5.0`. The gates also need
 the test runners the project uses.
 
+For typing `ytif` in any project, also install it on PATH with
+`go install github.com/undervoke/ytif/cmd/ytif@latest`. Inside a Go module
+that pins ytif as a tool, it runs every command through `go tool ytif`
+when the pinned version differs from its own, so the project's files are
+always read by the version they were written for; elsewhere it runs
+itself. `ytif update` replaces it with the latest release and leaves each
+project's pin alone.
+
 To adopt it, stage any new check files and run `ytif list`. Every
 discovered check without a contract and every gate step that bypasses the
 rail is a finding, and the gates fail until none remain. Write the

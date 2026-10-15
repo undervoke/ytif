@@ -7,13 +7,18 @@ import (
 	"runtime/debug"
 
 	"github.com/undervoke/ytif/internal/cli"
+	"github.com/undervoke/ytif/internal/launch"
 )
 
 // version is set by release builds through -ldflags "-X main.version=...".
 var version = "dev"
 
 func main() {
-	os.Exit(cli.Run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, buildVersion()))
+	v := buildVersion()
+	if code, ok := launch.Delegate(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, v); ok {
+		os.Exit(code)
+	}
+	os.Exit(cli.Run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, v))
 }
 
 func buildVersion() string {
