@@ -15,13 +15,13 @@ Pin ytif per project, so hooks, CI, and every clone run the version the
 project's files were written for. In a Go module (Go 1.24 or later):
 
 ```sh
-go get -tool github.com/undervoke/ytif/cmd/ytif@v0.5.0
+go get -tool github.com/undervoke/ytif/cmd/ytif@v0.6.0
 ```
 
 `go.mod` and `go.sum` then hold the version, and `go tool ytif` runs it;
 read every `ytif` below as `go tool ytif`. Elsewhere, download a release
 archive and verify it against `SHA256SUMS`, or run
-`go run github.com/undervoke/ytif/cmd/ytif@v0.5.0`. The gates also need
+`go run github.com/undervoke/ytif/cmd/ytif@v0.6.0`. The gates also need
 the test runners the project uses.
 
 For typing `ytif` in any project, also install it on PATH with
