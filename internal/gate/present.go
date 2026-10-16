@@ -13,8 +13,9 @@ import (
 )
 
 // findingLine matches path:line[:col]: message, the format checks use for
-// findings.
-var findingLine = regexp.MustCompile(`^([^\s:][^:]*):(\d+):(?:(\d+):)?\s*(.*)$`)
+// findings. The location ends the line or is followed by a space, so a clock
+// time such as 00:00:14.55 is not one.
+var findingLine = regexp.MustCompile(`^([^\s:][^:]*):(\d+):(?:(\d+):)?(?:\s+(.*))?$`)
 
 // present prints outcomes, dispatch errors, and findings, emits GitHub
 // annotations when requested, and returns the exit code.
