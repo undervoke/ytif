@@ -41,6 +41,14 @@ only what is missing, so it can rerun; a file it cannot edit, such as
 JSON with comments or a lefthook configuration that is not YAML, stops it
 before it changes anything. It needs a root `go.mod`, does not lower a
 newer pin, and leaves trusting the hooks in Codex and Pi to the user.
+Before writing integration files it builds the pinned tool with `go tool -n ytif`.
+If a pin change would leave an active Go vendor tree stale, init stops before
+changing files and gives the pin-and-vendor commands to run before retrying.
+It leaves `vendor/` untouched; an unexpected Go command failure may still leave
+changes in `go.mod` or `go.sum`. CI discovery includes tracked and nonignored
+unstaged workflows. When adding the push gate to a parallel pre-push hook that
+already has a stdin consumer, init makes the hook sequential so both consumers
+receive the complete push refs.
 Then stage the changes and any new check files and run `ytif list`. Every
 discovered check without a contract and every gate step that bypasses the
 rail is a finding, and the gates fail until none remain. Write the

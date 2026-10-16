@@ -61,12 +61,30 @@ func Run(root, self string, stdout, stderr io.Writer) int {
 		return gate.ExitUsage
 	}
 	if pin.run {
+		if err := pinVendor(root, self); err != nil {
+			fmt.Fprintf(stderr, "ytif init: %v\nytif init: nothing was changed\n", err)
+			return gate.ExitUsage
+		}
 		get := exec.Command("go", "get", "-tool", launch.Command+"@"+self)
 		get.Dir, get.Stdout, get.Stderr = root, stderr, stderr
 		if err := get.Run(); err != nil {
-			fmt.Fprintf(stderr, "ytif init: go get -tool %s@%s: %v\nytif init: nothing was changed\n", launch.Command, self, err)
+			fmt.Fprintf(stderr, "ytif init: go get -tool %s@%s: %v\nytif init: go.mod/go.sum may have changed; integration files were not written\n", launch.Command, self, err)
 			return gate.ExitUsage
 		}
+	}
+	// Check the same Go module mode the generated commands use. In particular,
+	// go get leaves vendor/ untouched, so an outdated vendor tree cannot be
+	// mistaken for a working installation. -n builds but does not run ytif.
+	probe := exec.Command("go", "tool", "-n", "ytif")
+	probe.Dir, probe.Stdout, probe.Stderr = root, io.Discard, stderr
+	if err := probe.Run(); err != nil {
+		fmt.Fprintf(stderr, "ytif init: the pinned `go tool ytif` is not ready: %v; resolve the Go error above and rerun init\n", err)
+		if pin.run {
+			fmt.Fprintln(stderr, "ytif init: go.mod/go.sum may have changed; integration files were not written")
+		} else {
+			fmt.Fprintln(stderr, "ytif init: integration files were not written")
+		}
+		return gate.ExitUsage
 	}
 	fmt.Fprintf(stdout, "%-9s %s\n", pin.status, pin.detail)
 	for _, f := range files {
@@ -124,6 +142,53 @@ func pinStep(root, self string) (pinPlan, error) {
 	return pinPlan{status: "unchanged", detail: "go.mod (ytif " + self + ")"}, nil
 }
 
+// pinVendor prevents a pin update from leaving an active vendor tree stale.
+// Go tool selects the vendor tree belonging to its module or workspace;
+// a modules.txt marked for the other mode does not activate vendoring.
+func pinVendor(root, self string) error {
+	cmd := exec.Command("go", "env", "GOWORK")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("read Go workspace: %w", err)
+	}
+	work := strings.TrimSpace(string(out))
+	workspace := work != "" && work != "off"
+	dir, sync := root, "go mod vendor"
+	if workspace {
+		dir, sync = filepath.Dir(work), "go work vendor"
+	}
+	vendor := filepath.Join(dir, "vendor")
+	info, err := os.Stat(vendor)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Join(vendor, "modules.txt"))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	first, _, _ := strings.Cut(string(data), "\n")
+	vendorWorkspace := false
+	if annotations, ok := strings.CutPrefix(first, "## "); ok {
+		for _, a := range strings.Split(annotations, ";") {
+			vendorWorkspace = vendorWorkspace || strings.TrimSpace(a) == "workspace"
+		}
+	}
+	if workspace != vendorWorkspace {
+		return nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("%s activates Go vendoring but has no modules.txt; preserve or relocate unrelated files and prepare the Go vendor tree before pinning ytif", vendor)
+	}
+	return fmt.Errorf("pinning ytif %s would leave %s stale; run `go get -tool %s@%s` from %s, then `%s` from %s, and rerun init", self, vendor, launch.Command, self, root, sync, dir)
+}
+
 // plan works out every file and collects every reason one cannot be
 // edited.
 func plan(root string) ([]file, []error) {
@@ -131,7 +196,11 @@ func plan(root string) ([]file, []error) {
 	if err != nil {
 		return nil, []error{err}
 	}
-	wired := gateconf.Wired(check.Repo{Root: root, Tracked: withWorkflows(root, tracked)})
+	tracked, err = withWorkflows(root, tracked)
+	if err != nil {
+		return nil, []error{err}
+	}
+	wired := gateconf.Wired(check.Repo{Root: root, Tracked: tracked})
 	var files []file
 	var errs []error
 	add := func(f file, err error) {
@@ -158,21 +227,19 @@ func plan(root string) ([]file, []error) {
 	return files, errs
 }
 
-// withWorkflows adds the workflows on disk to tracked, so a rerun before the
-// new workflow is staged finds it.
-func withWorkflows(root string, tracked []string) []string {
-	seen := map[string]bool{}
-	for _, t := range tracked {
-		seen[t] = true
+// withWorkflows includes unstaged workflows that Git can add, so reruns
+// find newly created workflows without counting ignored local drafts.
+func withWorkflows(root string, tracked []string) ([]string, error) {
+	out, err := exec.Command("git", "-C", root, "ls-files", "--others", "--exclude-standard", "-z", "--", ".github/workflows/").Output()
+	if err != nil {
+		return nil, fmt.Errorf("list unstaged workflows: %w", err)
 	}
-	entries, _ := os.ReadDir(filepath.Join(root, ".github", "workflows"))
-	for _, e := range entries {
-		p := ".github/workflows/" + e.Name()
-		if ext := path.Ext(p); !e.IsDir() && (ext == ".yml" || ext == ".yaml") && !seen[p] {
+	for _, p := range strings.Split(string(out), "\x00") {
+		if ext := path.Ext(p); path.Dir(p) == ".github/workflows" && (ext == ".yml" || ext == ".yaml") {
 			tracked = append(tracked, p)
 		}
 	}
-	return tracked
+	return tracked, nil
 }
 
 // compare reports how want relates to the file at rel.
@@ -271,6 +338,30 @@ func addHook(top *yaml.Node, hook, name, run string, stdin bool) error {
 	case h.Kind != yaml.MappingNode:
 		return fmt.Errorf("%s is not a mapping", hook)
 	}
+	if stdin {
+		// Lefthook shares a cached stdin reader between jobs. Run this hook
+		// sequentially so each consumer receives the complete push refs.
+		for i := 0; i+1 < len(h.Content); i += 2 {
+			if h.Content[i].Value == "parallel" {
+				old := h.Content[i+1]
+				var parallel bool
+				if old.Decode(&parallel) != nil || !parallel {
+					continue
+				}
+				uses, err := hookStdin(h)
+				if err != nil {
+					return fmt.Errorf("%s: %w", hook, err)
+				}
+				if !uses {
+					continue
+				}
+				if err := editable(old, hook+".parallel"); err != nil {
+					return err
+				}
+				h.Content[i+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "false", HeadComment: old.HeadComment, LineComment: old.LineComment, FootComment: old.FootComment}
+			}
+		}
+	}
 	if jobs := lookup(h, "jobs"); jobs != nil || lookup(h, "commands") == nil {
 		if jobs == nil {
 			jobs = &yaml.Node{Kind: yaml.SequenceNode}
@@ -298,6 +389,49 @@ func addHook(top *yaml.Node, hook, name, run string, stdin bool) error {
 	}
 	cmds.Content = append(cmds.Content, str(name), &yaml.Node{Kind: yaml.MappingNode, Content: fields})
 	return nil
+}
+
+type stdinJob struct {
+	UseStdin bool `yaml:"use_stdin"`
+	Group    struct {
+		Jobs []stdinJob `yaml:"jobs"`
+	} `yaml:"group"`
+}
+
+func (j stdinJob) readsStdin() bool {
+	if j.UseStdin {
+		return true
+	}
+	for _, child := range j.Group.Jobs {
+		if child.readsStdin() {
+			return true
+		}
+	}
+	return false
+}
+
+// hookStdin reads the effective job options, including aliases and merges,
+// to tell whether adding ytif push creates a second stdin consumer.
+func hookStdin(h *yaml.Node) (bool, error) {
+	var hook struct {
+		Jobs     []stdinJob          `yaml:"jobs"`
+		Commands map[string]stdinJob `yaml:"commands"`
+		Scripts  map[string]stdinJob `yaml:"scripts"`
+	}
+	if err := h.Decode(&hook); err != nil {
+		return false, err
+	}
+	for _, jobs := range []map[string]stdinJob{hook.Commands, hook.Scripts} {
+		for _, j := range jobs {
+			hook.Jobs = append(hook.Jobs, j)
+		}
+	}
+	for _, j := range hook.Jobs {
+		if j.readsStdin() {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 const workflowText = `name: ytif
@@ -419,7 +553,8 @@ func normalizeYAML(data []byte) []byte {
 }
 
 // hookConfig registers the guard as a PreToolUse hook in a Claude Code or
-// Codex hooks file, whose schemas match, unless a hook already runs it.
+// Codex hooks file, unless a foreground hook already runs it. Exec-form
+// handlers are recognized for Claude Code, which documents args semantics.
 func hookConfig(root, rel string) (file, error) {
 	data, ok, err := read(root, rel)
 	if err != nil {
@@ -448,17 +583,21 @@ func hookConfig(root, rel string) (file, error) {
 		var group struct {
 			Matcher string `json:"matcher"`
 			Hooks   []struct {
-				Type    string `json:"type"`
-				Command string `json:"command"`
-				Async   bool   `json:"async"`
-				If      string `json:"if"`
+				Type        string          `json:"type"`
+				Command     string          `json:"command"`
+				Args        json.RawMessage `json:"args"`
+				Async       bool            `json:"async"`
+				AsyncRewake bool            `json:"asyncRewake"`
+				Once        bool            `json:"once"`
+				If          string          `json:"if"`
 			} `json:"hooks"`
 		}
 		if json.Unmarshal(m, &group) != nil || !coversBash(group.Matcher) {
 			continue
 		}
 		for _, h := range group.Hooks {
-			if h.Type == "command" && !h.Async && h.If == "" && runsGuard(h.Command) {
+			if h.Type == "command" && !h.Async && !h.AsyncRewake && !h.Once && h.If == "" &&
+				(h.Args == nil || rel == ".claude/settings.json") && runsGuard(h.Command, h.Args) {
 				return file{path: rel, want: data, status: "unchanged"}, nil
 			}
 		}
@@ -501,15 +640,27 @@ func coversBash(matcher string) bool {
 	return err == nil && ok
 }
 
-// runsGuard reports whether a hook command is a ytif guard invocation:
-// ytif guard, with ytif as a path or not, or go tool ytif guard.
-func runsGuard(command string) bool {
-	f := strings.Fields(command)
+// runsGuard recognizes shell form when args is absent and exec form when
+// args is an array. In exec form command is one executable, not shell text.
+func runsGuard(command string, args json.RawMessage) bool {
+	var f []string
+	if args == nil {
+		f = strings.Fields(command)
+		if len(f) >= 2 {
+			f[len(f)-2] = strings.Trim(f[len(f)-2], `"'`)
+		}
+	} else {
+		var argv []string
+		if json.Unmarshal(args, &argv) != nil || argv == nil {
+			return false
+		}
+		f = append([]string{command}, argv...)
+	}
 	n := len(f)
-	if n < 2 || f[n-1] != "guard" || path.Base(strings.Trim(f[n-2], `"'`)) != "ytif" {
+	if n < 2 || f[n-1] != "guard" || path.Base(f[n-2]) != "ytif" {
 		return false
 	}
-	return n == 2 || n == 4 && f[0] == "go" && f[1] == "tool"
+	return n == 2 || n == 4 && path.Base(f[0]) == "go" && f[1] == "tool"
 }
 
 // plugin writes a guard plugin that starts the pinned ytif.
