@@ -97,7 +97,8 @@ const (
 )
 
 // Tally folds one test's results across the projects it ran in: any failure
-// fails it, otherwise any pass passes it, otherwise it was skipped.
+// fails it, otherwise any pass passes it, otherwise it was skipped. The
+// output of every run that passed or failed is kept, a pass's as its log.
 type Tally struct {
 	seen, failed, passed bool
 	elapsed              time.Duration
@@ -111,11 +112,13 @@ func (t *Tally) Add(s Status, elapsed time.Duration, output string) {
 	switch s {
 	case Failed:
 		t.failed = true
-		if output = Plain(output); output != "" {
-			t.output = append(t.output, output)
-		}
 	case Passed:
 		t.passed = true
+	default:
+		return
+	}
+	if output = Plain(output); output != "" {
+		t.output = append(t.output, output)
 	}
 }
 
@@ -128,7 +131,7 @@ func (t *Tally) Apply(rep *check.Report, k check.Key) {
 	case t.failed:
 		rep.Results = append(rep.Results, check.Result{Key: k, Outcome: check.Fail, Elapsed: t.elapsed, Timed: true, Output: strings.Join(t.output, "\n---\n")})
 	case t.passed:
-		rep.Results = append(rep.Results, check.Result{Key: k, Outcome: check.Pass, Elapsed: t.elapsed, Timed: true})
+		rep.Results = append(rep.Results, check.Result{Key: k, Outcome: check.Pass, Elapsed: t.elapsed, Timed: true, Output: strings.Join(t.output, "\n---\n")})
 	default:
 		rep.Skipped = append(rep.Skipped, k)
 	}

@@ -69,6 +69,9 @@ throwing:
 export async function verifyXxx({ files, signal }, out) // out.write(text)
 ```
 
+A passing Playwright test's stdout and stderr are shown as its log too, so
+workflow commands it writes, such as `::warning`, reach GitHub.
+
 Test names must be static; what ytif cannot list exactly fails discovery.
 
 Discovery reads Git-tracked files only, so an untracked new test stays

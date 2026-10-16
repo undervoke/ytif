@@ -11,6 +11,7 @@ package playwright
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -120,12 +121,31 @@ type spec struct {
 		Results     []struct {
 			Duration float64    `json:"duration"`
 			Errors   []errorDoc `json:"errors"`
+			Stdout   []stdio    `json:"stdout"`
+			Stderr   []stdio    `json:"stderr"`
 		} `json:"results"`
 	} `json:"tests"`
 }
 
 type errorDoc struct {
 	Message string `json:"message"`
+}
+
+// stdio is one chunk a test wrote, as text or as base64 bytes.
+type stdio struct {
+	Text   string `json:"text"`
+	Buffer string `json:"buffer"`
+}
+
+func (s stdio) String() string {
+	if s.Buffer == "" {
+		return s.Text
+	}
+	b, err := base64.StdEncoding.DecodeString(s.Buffer)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // walk calls fn for every spec with its describe titles; a top-level suite
@@ -316,6 +336,13 @@ func (s *Source) runConfig(ctx context.Context, repo check.Repo, c *config, keys
 				var msgs []string
 				for _, res := range pt.Results {
 					d += time.Duration(res.Duration * float64(time.Millisecond))
+					var written strings.Builder
+					for _, s := range slices.Concat(res.Stdout, res.Stderr) {
+						written.WriteString(s.String())
+					}
+					if w := strings.TrimRight(written.String(), "\n"); w != "" {
+						msgs = append(msgs, w)
+					}
 					for _, e := range res.Errors {
 						msgs = append(msgs, strings.TrimSpace(e.Message))
 					}
