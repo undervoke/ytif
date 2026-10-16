@@ -32,11 +32,19 @@ always read by the version they were written for; elsewhere it runs
 itself. `ytif update` replaces it with the latest release and leaves each
 project's pin alone.
 
-To adopt it, stage any new check files and run `ytif list`. Every
+To adopt it, run `ytif init` from the installed ytif at the repository
+root. It pins that ytif's version as a tool, creates the inventory and the
+exemptions, wires `ytif commit` and `ytif push` into lefthook and
+`ytif ci` into a workflow, and registers the agent guard below for Claude
+Code, Codex, OpenCode, and Pi. It keeps what is already there and adds
+only what is missing, so it can rerun; a file it cannot edit, such as
+JSON with comments or a lefthook configuration that is not YAML, stops it
+before it changes anything. It needs a root `go.mod`, does not lower a
+newer pin, and leaves trusting the hooks in Codex and Pi to the user.
+Then stage the changes and any new check files and run `ytif list`. Every
 discovered check without a contract and every gate step that bypasses the
 rail is a finding, and the gates fail until none remain. Write the
-contracts and exemptions, wire the gates and the guard as below, and
-rerun `ytif list`.
+contracts and exemptions and rerun `ytif list`.
 
 ## Checks
 
@@ -264,8 +272,9 @@ at `http://127.0.0.1:8765`, rebuilding the page from
 
 Agents leave checks to the Git hooks and CI that start the gates.
 `ytif guard` is a PreToolUse hook that refuses agent commands that run
-checks. For Claude Code (`.claude/settings.json`) and Codex
-(`.codex/hooks.json`):
+checks. It refuses nothing until an agent's configuration runs it, which
+`ytif init` writes. For Claude Code (`.claude/settings.json`) and Codex
+(`.codex/hooks.json`), that is:
 
 ```json
 {
@@ -277,9 +286,10 @@ checks. For Claude Code (`.claude/settings.json`) and Codex
 }
 ```
 
-For OpenCode, copy `integrations/opencode/ytif-guard.ts` into
-`.opencode/plugins/`; for Pi, `integrations/pi/ytif-guard.ts` into
-`.pi/extensions/`, and set its `YTIF` command to how the project runs ytif.
+For OpenCode and Pi, it writes `integrations/opencode/ytif-guard.ts` to
+`.opencode/plugins/` and `integrations/pi/ytif-guard.ts` to
+`.pi/extensions/`, with its `YTIF` command set to `go tool ytif`. Codex
+runs a project's hooks only after the user trusts them in `/hooks`.
 
 It refuses, directly or through `npx`, a package manager's `exec` or
 `dlx`, or a package binary shorthand such as `pnpm vitest` where the

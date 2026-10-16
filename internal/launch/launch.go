@@ -20,8 +20,9 @@ import (
 )
 
 const (
-	module  = "github.com/undervoke/ytif"
-	command = module + "/cmd/ytif"
+	module = "github.com/undervoke/ytif"
+	// Command is the package path a project pins as a tool.
+	Command = module + "/cmd/ytif"
 
 	// delegatedEnv marks a ytif that Delegate started. A pinned build reports
 	// its pinned version and so runs itself anyway; the mark keeps a build
@@ -32,13 +33,13 @@ const (
 // Delegate runs args through `go tool ytif` when the working directory's
 // module pins a ytif version other than self, and returns that run's exit
 // code. It reports false without running anything when this ytif should run
-// args itself: for update, for a development build, and outside a module
-// that pins ytif.
+// args itself: for update and init, which change what is installed or
+// pinned, for a development build, and outside a module that pins ytif.
 func Delegate(args []string, stdin io.Reader, stdout, stderr io.Writer, self string) (int, bool) {
-	if self == "dev" || os.Getenv(delegatedEnv) != "" || len(args) > 0 && args[0] == "update" {
+	if self == "dev" || os.Getenv(delegatedEnv) != "" || len(args) > 0 && (args[0] == "update" || args[0] == "init") {
 		return 0, false
 	}
-	pin, ok := pinned()
+	pin, ok := Pinned("")
 	if !ok || pin == self {
 		return 0, false
 	}
@@ -61,10 +62,12 @@ func Delegate(args []string, stdin io.Reader, stdout, stderr io.Writer, self str
 	return gate.ExitPass, true
 }
 
-// pinned returns the ytif version required by the working directory's
-// module when that module declares ytif as a tool.
-func pinned() (string, bool) {
-	out, err := exec.Command("go", "mod", "edit", "-json").Output()
+// Pinned returns the ytif version required by the module of dir, the
+// working directory when "", when that module declares ytif as a tool.
+func Pinned(dir string) (string, bool) {
+	cmd := exec.Command("go", "mod", "edit", "-json")
+	cmd.Dir = dir
+	out, err := cmd.Output()
 	if err != nil {
 		return "", false
 	}
@@ -75,7 +78,7 @@ func pinned() (string, bool) {
 	if json.Unmarshal(out, &mod) != nil {
 		return "", false
 	}
-	if !slices.ContainsFunc(mod.Tool, func(t struct{ Path string }) bool { return t.Path == command }) {
+	if !slices.ContainsFunc(mod.Tool, func(t struct{ Path string }) bool { return t.Path == Command }) {
 		return "", false
 	}
 	for _, r := range mod.Require {
@@ -90,7 +93,7 @@ func pinned() (string, bool) {
 // version change, warning when the install directory is not where this ytif
 // runs from.
 func Update(stdout, stderr io.Writer, self string) int {
-	install := exec.Command("go", "install", command+"@latest")
+	install := exec.Command("go", "install", Command+"@latest")
 	install.Stdout, install.Stderr = stdout, stderr
 	if err := install.Run(); err != nil {
 		fmt.Fprintf(stderr, "ytif update: %v\n", err)

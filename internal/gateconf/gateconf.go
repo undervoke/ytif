@@ -35,6 +35,7 @@ type entry struct {
 	uses     string // GitHub Actions reference
 	job      bool   // uses names a reusable workflow, not a step action
 	repoCode string // set for constructs such as lefthook scripts
+	hook     string // the lefthook hook the entry belongs to
 }
 
 func (Checker) Check(ctx context.Context, repo check.Repo, exemptions inventory.Exemptions) []reconcile.Finding {

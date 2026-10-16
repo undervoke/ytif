@@ -53,13 +53,7 @@ func lefthookEntries(repo check.Repo) ([]entry, []reconcile.Finding) {
 			}
 		}
 	}
-	for _, ext := range lefthookExtensions {
-		for _, name := range lefthookNames {
-			if r.file == "" && exists(name+ext) {
-				r.file = name + ext
-			}
-		}
-	}
+	r.file = lefthookFile(repo.Root)
 	if r.file == "" {
 		return nil, r.findings
 	}
@@ -101,8 +95,22 @@ func lefthookEntries(repo check.Repo) ([]entry, []reconcile.Finding) {
 	return r.entries, r.findings
 }
 
+// lefthookFile returns the main configuration lefthook reads under root,
+// or "" when there is none.
+func lefthookFile(root string) string {
+	for _, ext := range lefthookExtensions {
+		for _, name := range lefthookNames {
+			if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(name+ext))); err == nil {
+				return name + ext
+			}
+		}
+	}
+	return ""
+}
+
 type lefthookReader struct {
 	file      string
+	current   string // the hook being read
 	templates map[string]string
 	entries   []entry
 	findings  []reconcile.Finding
@@ -122,7 +130,7 @@ func (r *lefthookReader) run(loc, line string, sc scope, expand bool) {
 	if expand {
 		script = r.expand(line)
 	}
-	r.entries = append(r.entries, entry{surface: inventory.SurfaceLefthook, location: loc, run: script, match: line, scope: sc})
+	r.entries = append(r.entries, entry{surface: inventory.SurfaceLefthook, location: loc, run: script, match: line, scope: sc, hook: r.current})
 }
 
 // builtinTemplate matches lefthook's own replacements: file lists, the job
@@ -150,6 +158,8 @@ func (r *lefthookReader) mapping(loc string, v any) (map[string]any, bool) {
 }
 
 func (r *lefthookReader) hook(name string, v any) {
+	r.current = name
+	defer func() { r.current = "" }()
 	m, ok := r.mapping(r.file+": "+name, v)
 	if !ok {
 		return

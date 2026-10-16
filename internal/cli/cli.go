@@ -18,6 +18,7 @@ import (
 	"github.com/undervoke/ytif/internal/gate"
 	"github.com/undervoke/ytif/internal/gitx"
 	"github.com/undervoke/ytif/internal/guard"
+	"github.com/undervoke/ytif/internal/initcmd"
 	"github.com/undervoke/ytif/internal/launch"
 	"github.com/undervoke/ytif/internal/record"
 )
@@ -30,6 +31,7 @@ gates:
   ci                     run every placed check against the whole tree
 
 other:
+  init                   pin this ytif as a Go tool, wire the gates, and register the agent guard
   list                   show managed checks and reconciliation findings
   stats                  show recent elapsed time and hits per check
   board [--out PATH]     write the inventory board as one HTML file and open it
@@ -61,6 +63,16 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, version strin
 	switch cmd {
 	case check.GateCommit, check.GatePush, check.GateCI:
 		return runGate(ctx, cmd, rest, stdin, stdout, stderr)
+	case "init":
+		if len(rest) != 0 {
+			fmt.Fprintf(stderr, "ytif init: takes no arguments\n%s", usageText)
+			return gate.ExitUsage
+		}
+		root, code := repoRoot(stderr)
+		if code != 0 {
+			return code
+		}
+		return initcmd.Run(root, version, stdout, stderr)
 	case "list":
 		return runList(ctx, rest, stdout, stderr)
 	case "stats":
