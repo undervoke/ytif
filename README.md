@@ -260,8 +260,8 @@ at `http://127.0.0.1:8765`, rebuilding the page from
 ## Agent guard
 
 Agents leave checks to the Git hooks and CI that start the gates.
-`ytif guard` is a PreToolUse hook that refuses agent commands running test
-runners or ytif gates. For Claude Code (`.claude/settings.json`) and Codex
+`ytif guard` is a PreToolUse hook that refuses agent commands that run
+checks. For Claude Code (`.claude/settings.json`) and Codex
 (`.codex/hooks.json`):
 
 ```json
@@ -278,9 +278,36 @@ For OpenCode, copy `integrations/opencode/ytif-guard.ts` into
 `.opencode/plugins/`; for Pi, `integrations/pi/ytif-guard.ts` into
 `.pi/extensions/`, and set its `YTIF` command to how the project runs ytif.
 
-Only the user grants an exception: `ytif allow 8h` lets agents run them
-directly for unattended work, and `ytif allow --off` ends it. A test runner
-run directly leaves no record.
+It refuses, directly or through `npx`, a package manager's `exec` or
+`dlx`, or a package binary shorthand such as `pnpm vitest` where the
+package has no script of that name:
+
+- a ytif gate, and `ytif allow`;
+- a test runner, as the gate configuration check knows them;
+- a `*.verify.mjs` module run as the program of `node`, `tsx`, or `bun`;
+- a package script, Nx target, or Make goal whose name has `test`,
+  `check`, or `verify` as a word of its own, set off by the ends of the
+  name or by characters other than letters and digits: `pnpm test:fast`,
+  `nx run-many -t lint test`, `make check`, but not `pnpm typecheck`;
+- `prettier --check`, `tsc --noEmit` and `vue-tsc --noEmit`, `eslint`
+  without `--fix`, `go vet`, `gofmt -l` or `-d`, and `go mod tidy -diff`;
+- a package script that does any of these, read from `package.json` with
+  the words passed on to it and the pre and post scripts the package
+  manager runs, in the packages `-r`, `--filter`, or `--workspace` select
+  by name or path: `pnpm run lint --fix` passes where `pnpm run lint`
+  is refused.
+
+It reads only the scripts a command names. A script whose directory it
+cannot tell, a selection by dependency, change, or exclusion, a script
+passed a word that is not literal, and Nx target and Make recipe bodies
+are not read, so a check run there, or one named only in an argument
+(`node tools/smoke.mjs test`), passes. So does `eslint` or `gofmt -l`
+given a word that is not literal, which could be the option that edits.
+
+Only the user grants an exception: `ytif allow 8h` lets agents run checks
+directly for unattended work, and `ytif allow --off` ends it. An agent's
+`ytif allow` is refused even then, including one behind a package script.
+A check run directly leaves no record.
 
 ## License
 

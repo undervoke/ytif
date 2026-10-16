@@ -411,58 +411,60 @@ func wordsBeforeDashes(cmd shellcmd.Command) (words []string, ok bool) {
 	return words, true
 }
 
-// execRunner returns the test runner a package manager's exec starts: the
-// command from word i, or the script of -c.
+// execRunner returns the test runner a package manager's exec starts,
+// itself or through the commands it runs.
 func execRunner(cmd shellcmd.Command, i int) string {
+	for _, c := range execCommands(cmd, i) {
+		if r := TestRunner(c); r != "" {
+			return r
+		}
+	}
+	return ""
+}
+
+// execCommands returns the commands a package manager's exec runs: the
+// command from word i with the commands it runs itself, or those of the
+// script of -c. It returns none when a word it reads is not literal.
+func execCommands(cmd shellcmd.Command, i int) []shellcmd.Command {
 	for ; i < len(cmd.Args); i++ {
 		if !cmd.Literal[i] {
-			return ""
+			return nil
 		}
 		a := cmd.Args[i]
 		switch {
 		case a == "-c" || a == "--call":
 			if i+1 < len(cmd.Args) && cmd.Literal[i+1] {
-				return scriptRunner(cmd.Args[i+1])
+				return scriptCommands(cmd.Args[i+1])
 			}
-			return ""
+			return nil
 		case strings.HasPrefix(a, "--call="):
-			return scriptRunner(strings.TrimPrefix(a, "--call="))
+			return scriptCommands(strings.TrimPrefix(a, "--call="))
 		case a == "--":
 			if i+1 < len(cmd.Args) {
-				return commandRunner(cmd.Rest(i + 1))
+				return wrappedCommands(cmd.Rest(i + 1))
 			}
-			return ""
+			return nil
 		case strings.HasPrefix(a, "-"):
 			if execValueFlags[a] {
 				i++
 			}
 		default:
-			return commandRunner(cmd.Rest(i))
+			return wrappedCommands(cmd.Rest(i))
 		}
 	}
-	return ""
+	return nil
 }
 
-// commandRunner returns the test runner a wrapped command starts, itself or
-// through the commands it runs.
-func commandRunner(cmd shellcmd.Command) string {
+// wrappedCommands returns the command a wrapper runs, with the commands
+// that command runs itself.
+func wrappedCommands(cmd shellcmd.Command) []shellcmd.Command {
 	cmds, _ := shellcmd.Expand(shellcmd.Unwrap(cmd))
-	for _, c := range cmds {
-		if r := TestRunner(c); r != "" {
-			return r
-		}
-	}
-	return ""
+	return cmds
 }
 
-func scriptRunner(script string) string {
+func scriptCommands(script string) []shellcmd.Command {
 	cmds, _ := shellcmd.Parse(script)
-	for _, c := range cmds {
-		if r := TestRunner(c); r != "" {
-			return r
-		}
-	}
-	return ""
+	return cmds
 }
 
 // goSubcommand returns the index of go's subcommand after its -C option;

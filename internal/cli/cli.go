@@ -33,7 +33,7 @@ other:
   list                   show managed checks and reconciliation findings
   stats                  show recent elapsed time and hits per check
   board [--out PATH]     write the inventory board as one HTML file and open it
-  guard                  agent PreToolUse hook: refuse agent test runs
+  guard                  agent PreToolUse hook: refuse agent check runs
   allow [DURATION|--off] let agents run checks themselves for DURATION
   update                 replace the ytif on PATH with the latest release
   version                print the version

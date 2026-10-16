@@ -25,6 +25,9 @@ type Command struct {
 	// Unresolved explains a script the command runs that cannot be read,
 	// such as a non-literal sh -c script or a shell reading a pipe.
 	Unresolved string
+	// Chdir reports that a wrapper, env -C or sudo -D, runs the command in
+	// another directory.
+	Chdir bool
 }
 
 // Stdin is where a command reads standard input from, as far as the script
@@ -135,6 +138,11 @@ func expand(c Command, depth int) ([]Command, error) {
 			firstErr = fmt.Errorf("%s: %w", c.Text, err)
 		}
 		cmds = append(cmds, nested...)
+	}
+	if c.Chdir {
+		for i := range cmds {
+			cmds[i].Chdir = true // they run where c runs
+		}
 	}
 	return cmds, firstErr
 }
@@ -376,6 +384,7 @@ func splitString(s string) (Command, bool) {
 // env (with assignments and -S), time, command, builtin, exec, nice, nohup,
 // timeout, xargs, and sudo, however their path is spelled.
 func Unwrap(c Command) Command {
+	chdir := false
 next:
 	for {
 		name := ""
@@ -407,7 +416,11 @@ next:
 						return Command{Text: c.Text, Unresolved: "the env -S command cannot be read"}
 					}
 					c = split
+					c.Chdir = chdir
 					continue next
+				}
+				if changesDir(name, a) {
+					chdir = true
 				}
 				i++
 				if valueFlags[name][a] {
@@ -430,7 +443,19 @@ next:
 			return Command{Text: c.Text}
 		}
 		c = c.Rest(i)
+		c.Chdir = chdir
 	}
+}
+
+// changesDir reports whether a wrapper option sets the working directory.
+func changesDir(wrapper, opt string) bool {
+	switch wrapper {
+	case "env":
+		return strings.HasPrefix(opt, "-C") || opt == "--chdir" || strings.HasPrefix(opt, "--chdir=")
+	case "sudo":
+		return strings.HasPrefix(opt, "-D") || opt == "--chdir" || strings.HasPrefix(opt, "--chdir=")
+	}
+	return false
 }
 
 // envSplit returns the command env -S runs, given the index of -S: its
