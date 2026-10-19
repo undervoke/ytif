@@ -15,6 +15,7 @@ import (
 	"github.com/undervoke/ytif/internal/allow"
 	"github.com/undervoke/ytif/internal/board"
 	"github.com/undervoke/ytif/internal/check"
+	"github.com/undervoke/ytif/internal/checkrun"
 	"github.com/undervoke/ytif/internal/gate"
 	"github.com/undervoke/ytif/internal/gitx"
 	"github.com/undervoke/ytif/internal/guard"
@@ -31,6 +32,7 @@ gates:
   ci                     run every placed check against the whole tree
 
 other:
+  check                  run every project-registered pre-gate command
   init                   pin this ytif as a Go tool, wire the gates, and register the agent guard
   list                   show managed checks and reconciliation findings
   stats                  show recent elapsed time and hits per check
@@ -63,6 +65,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, version strin
 	switch cmd {
 	case check.GateCommit, check.GatePush, check.GateCI:
 		return runGate(ctx, cmd, rest, stdin, stdout, stderr)
+	case "check":
+		return runCheck(ctx, rest, stdout, stderr)
 	case "init":
 		if len(rest) != 0 {
 			fmt.Fprintf(stderr, "ytif init: takes no arguments\n%s", usageText)
@@ -99,6 +103,24 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, version strin
 	}
 	fmt.Fprintf(stderr, "ytif: unknown command %q\n%s", cmd, usageText)
 	return gate.ExitUsage
+}
+
+func runCheck(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("check", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	jobs := fs.Int("jobs", 2, "run at most N registered commands at once")
+	records := fs.String("records", "", "append execution records to PATH")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+		return usageError(stderr, fs, "takes no arguments; runs the whole registered list")
+	}
+	if *jobs < 1 {
+		return usageError(stderr, fs, "--jobs must be at least 1")
+	}
+	root, code := repoRoot(stderr)
+	if code != 0 {
+		return code
+	}
+	return checkrun.Run(ctx, root, checkrun.Options{Jobs: *jobs, Records: *records, Stdout: stdout, Stderr: stderr})
 }
 
 func runGate(ctx context.Context, name string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -149,7 +171,7 @@ func runStats(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("stats", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	last := fs.Int("last", 20, "average over the last N observations of each check")
-	gateName := fs.String("gate", "", "only this gate (commit, push, ci)")
+	gateName := fs.String("gate", "", "only this lane (check, commit, push, ci)")
 	ctxName := fs.String("context", "", "only this context (local, ci, agent)")
 	var paths multiFlag
 	fs.Var(&paths, "records", "record file to read (repeatable); default: local records")

@@ -1,8 +1,8 @@
 // Package inventory reads the contract ledger and the gate exemptions.
 //
-// The inventory records each check's contract and placement; it never
-// registers a check. The exemptions list the gate entries that run outside
-// ytif, each with the reason it is accepted, and carry no contracts.
+// The checks ledger records contracts and placement, not registrations.
+// Commands lists project-owned commands for on-demand execution. The exemptions
+// list gate entries running outside ytif, with their reasons.
 package inventory
 
 import (
@@ -30,6 +30,7 @@ type Inventory struct {
 	Version    int        `yaml:"version"`
 	Vocabulary Vocabulary `yaml:"vocabulary,omitempty"`
 	Prepare    []Prep     `yaml:"prepare,omitempty"`
+	Commands   []Command  `yaml:"commands,omitempty"`
 	Checks     []Entry    `yaml:"checks"`
 }
 
@@ -112,6 +113,16 @@ const (
 	SurfaceLefthook      = "lefthook"
 	SurfaceGitHubActions = "github-actions"
 )
+
+// Command is one named command in the whole-list, pre-gate execution lane.
+// Cwd is relative to the repository root unless absolute. Exclusive names
+// resources that another command with the same token cannot use concurrently.
+type Command struct {
+	Name      string   `yaml:"name"`
+	Run       []string `yaml:"run"`
+	Cwd       string   `yaml:"cwd,omitempty"`
+	Exclusive []string `yaml:"exclusive,omitempty"`
+}
 
 // LoadInventory reads InventoryFile under root. A missing file is an empty
 // inventory.

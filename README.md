@@ -15,13 +15,13 @@ Pin ytif per project, so hooks, CI, and every clone run the version the
 project's files were written for. In a Go module (Go 1.24 or later):
 
 ```sh
-go get -tool github.com/undervoke/ytif/cmd/ytif@v0.7.0
+go get -tool github.com/undervoke/ytif/cmd/ytif@v0.8.0
 ```
 
 `go.mod` and `go.sum` then hold the version, and `go tool ytif` runs it;
 read every `ytif` below as `go tool ytif`. Elsewhere, download a release
 archive and verify it against `SHA256SUMS`, or run
-`go run github.com/undervoke/ytif/cmd/ytif@v0.7.0`. The gates also need
+`go run github.com/undervoke/ytif/cmd/ytif@v0.8.0`. The gates also need
 the test runners the project uses.
 
 For typing `ytif` in any project, also install it on PATH with
@@ -56,7 +56,7 @@ contracts and exemptions and rerun `ytif list`.
 
 ## Checks
 
-Checks are discovered, never registered by hand. A key is `runner:unit:name`:
+Gate checks are discovered, never registered by hand. A key is `runner:unit:name`:
 
 | Runner | Discovered from | Unit | Name |
 |---|---|---|---|
@@ -115,6 +115,68 @@ prepare:
   - runners: [vitest-test]
     run: [pnpm, exec, nx, run-many, -t, prepare]
 ```
+
+## Pre-gate commands
+
+`ytif check --jobs 4` runs every command registered under `commands:` in
+`ytif-inventory.yaml`, without gate preparation or test discovery. Agents
+may run this command. Projects choose what is useful here; ytif does not
+admit commands by a tool allowlist or an elapsed-time threshold.
+
+```yaml
+version: 2
+commands:
+  - name: formatting
+    run: [pnpm, exec, prettier, --list-different, .]
+  - name: maps
+    run: [node, tools/maps/env.mjs, --check]
+    exclusive: [maps]
+  - name: catalog
+    run: [node, tools/catalog/cli.mjs, --check]
+checks: []
+```
+
+Each entry has a unique `name` and a `run` argv. `cwd` optionally changes
+its directory from the repository root. `exclusive` is an optional list of
+resource names: entries sharing a name never overlap. The project owns
+these declarations; tokens express mutual exclusion, not dependencies,
+ordering, or duplicate-work detection. `--jobs N` bounds concurrently
+running entries, not workers inside their tools; it defaults to 2,
+and `--jobs 1` runs sequentially in list order. There is no subset
+selection. Independent entries run even after another fails. Output is
+prefixed by entry name, followed by a result and elapsed time for each.
+Ctrl-C cancels running process groups and stops pending entries.
+
+Before starting any entry, ytif reads the entire list and rejects known
+test runners, explicit build commands, and package/Make/Nx tasks with a
+`test` or `build` word in their names. This keeps builds and tests at the
+gates. It also rejects calls to ytif gates, to `check` itself (recursion),
+and to `allow` (the user's exception mechanism). It follows literal shell
+wrappers and package scripts with their arguments and lifecycle hooks,
+using the same bounded traversal as the agent guard. For Nx it reads
+`project.json`, `package.json` Nx targets/scripts, and `nx.json` target
+settings, following explicit target dependencies and declared package or
+implicit project edges. `nx affected` is inspected against every non-excluded
+static project, since future diffs may select any of them. Build/test-named
+dependencies are rejected by name even when no current dependency matches;
+register the direct check command when that task name obscures a pure check.
+It does not execute Nx or its plugins to classify commands. Inferred targets,
+workspace packages without `project.json` or `package.json` Nx metadata,
+import-inferred edges, computed options, changed/unknown directories, and
+dynamic calls inside arbitrary programs remain the project's responsibility.
+TypeScript emission checks read strict-JSON configs and relative `extends`;
+JSONC and package-resolved configs remain unresolved. Unknown option arity
+leaves file operands unresolved, but a known emitting config is still rejected.
+Unknown branches pass; admission is not a guarantee that a command contains no
+hidden build or test. Reclassification happens on every invocation, so
+editing a registered script changes the next decision.
+
+Completed commands record timing and outcomes under the separate `check`
+lane: `ytif stats --gate check`. `--records PATH` uses another record file.
+Interrupted or unstarted commands have no completed result. A pass does
+not replace any gate check. Exit codes are `0` when every command passes,
+`1` for execution failures or interruption, and `2` for invalid registration,
+rejected commands, or a recording failure.
 
 ## The inventory
 
@@ -278,7 +340,8 @@ at `http://127.0.0.1:8765`, rebuilding the page from
 
 ## Agent guard
 
-Agents leave checks to the Git hooks and CI that start the gates.
+Agents run registered pre-gate commands through `ytif check`; other checks
+are left to the Git hooks and CI that start the gates.
 `ytif guard` is a PreToolUse hook that refuses agent commands that run
 checks. It refuses nothing until an agent's configuration runs it, which
 `ytif init` writes. For Claude Code (`.claude/settings.json`) and Codex

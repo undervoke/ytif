@@ -31,6 +31,7 @@ type scripts struct {
 	manifests  map[string]*manifest
 	allow      bool   // a script runs ytif allow
 	hit        string // the first check a script runs
+	judge      func(shellcmd.Command, string) string
 }
 
 const (
@@ -46,7 +47,19 @@ type manifest struct {
 }
 
 func newScripts(openChecks func() bool) *scripts {
-	return &scripts{openChecks: openChecks, seen: map[string]bool{}, manifests: map[string]*manifest{}}
+	return &scripts{openChecks: openChecks, seen: map[string]bool{}, manifests: map[string]*manifest{},
+		judge: func(c shellcmd.Command, _ string) string { return checkRun(c) }}
+}
+
+// Inspect follows the same literal wrappers and package scripts as the guard,
+// using judge instead of the guard's refusal policy. Unknown directories and
+// unresolved script branches retain the guard's bounded, best-effort behavior.
+func Inspect(command, dir string, judge func(shellcmd.Command, string) string) string {
+	s := newScripts(func() bool { return true })
+	s.judge = judge
+	cmds, _ := shellcmd.Parse(command)
+	s.walk(s.expand(cmds, dir), dir, 0)
+	return s.hit
 }
 
 // walk judges cmds, run in dir ("" when unknown), and follows the package
@@ -59,7 +72,7 @@ func (s *scripts) walk(cmds []shellcmd.Command, dir string, depth int) {
 		if gateconf.RailCommand(c) == "allow" {
 			s.allow = true
 		}
-		if h := checkRun(c); h != "" && s.hit == "" {
+		if h := s.judge(c, dir); h != "" && s.hit == "" {
 			s.hit = h
 		}
 		run, ok := gateconf.PackageScript(c)
