@@ -42,29 +42,51 @@ const (
 // Run handles one hook invocation. It always succeeds; a refusal is the
 // decision it prints.
 func Run(stdin io.Reader, stdout, stderr io.Writer) {
+	runHook(stdin, stdout, stderr, false)
+}
+
+// RunCursor handles Cursor's beforeShellExecution payload and response.
+func RunCursor(stdin io.Reader, stdout, stderr io.Writer) {
+	runHook(stdin, stdout, stderr, true)
+}
+
+func runHook(stdin io.Reader, stdout, stderr io.Writer, cursor bool) {
 	var payload struct {
-		Cwd       string `json:"cwd"`
+		Cwd       string          `json:"cwd"`
+		Command   json.RawMessage `json:"command"`
 		ToolInput struct {
 			Command json.RawMessage `json:"command"`
 		} `json:"tool_input"`
 	}
-	if json.NewDecoder(stdin).Decode(&payload) != nil {
-		return
+	decoded := json.NewDecoder(stdin).Decode(&payload) == nil
+	raw := payload.ToolInput.Command
+	if cursor {
+		raw = payload.Command
 	}
-	command, ok := commandText(payload.ToolInput.Command)
-	if !ok {
+	command, ok := commandText(raw)
+	if !decoded || !ok {
+		if cursor {
+			_ = json.NewEncoder(stdout).Encode(map[string]string{"permission": "allow"})
+		}
 		return
 	}
 	g := &guard{cwd: payload.Cwd}
 	runner, reason := g.refused(command)
 	if runner == "" {
+		if cursor {
+			_ = json.NewEncoder(stdout).Encode(map[string]string{"permission": "allow"})
+		}
 		return
 	}
-	_ = json.NewEncoder(stdout).Encode(map[string]any{"hookSpecificOutput": map[string]string{
-		"hookEventName":            "PreToolUse",
-		"permissionDecision":       "deny",
-		"permissionDecisionReason": reason,
-	}})
+	if cursor {
+		_ = json.NewEncoder(stdout).Encode(map[string]string{"permission": "deny", "user_message": reason})
+	} else {
+		_ = json.NewEncoder(stdout).Encode(map[string]any{"hookSpecificOutput": map[string]string{
+			"hookEventName":            "PreToolUse",
+			"permissionDecision":       "deny",
+			"permissionDecisionReason": reason,
+		}})
+	}
 	common, err := g.commonDir()
 	if err == nil {
 		err = recordRefusal(common, runner, command)

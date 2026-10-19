@@ -7,6 +7,8 @@ import _ "embed"
 var (
 	//go:embed opencode/ytif-guard.ts
 	OpenCode string
+	//go:embed kilo/ytif-guard.ts
+	Kilo string
 	//go:embed pi/ytif-guard.ts
 	Pi string
 )

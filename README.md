@@ -15,13 +15,13 @@ Pin ytif per project, so hooks, CI, and every clone run the version the
 project's files were written for. In a Go module (Go 1.24 or later):
 
 ```sh
-go get -tool github.com/undervoke/ytif/cmd/ytif@v0.8.0
+go get -tool github.com/undervoke/ytif/cmd/ytif@v0.9.0
 ```
 
 `go.mod` and `go.sum` then hold the version, and `go tool ytif` runs it;
 read every `ytif` below as `go tool ytif`. Elsewhere, download a release
 archive and verify it against `SHA256SUMS`, or run
-`go run github.com/undervoke/ytif/cmd/ytif@v0.8.0`. The gates also need
+`go run github.com/undervoke/ytif/cmd/ytif@v0.9.0`. The gates also need
 the test runners the project uses.
 
 For typing `ytif` in any project, also install it on PATH with
@@ -33,14 +33,28 @@ itself. `ytif update` replaces it with the latest release and leaves each
 project's pin alone.
 
 To adopt it, run `ytif init` from the installed ytif at the repository
-root. It pins that ytif's version as a tool, creates the inventory and the
-exemptions, wires `ytif commit` and `ytif push` into lefthook and
-`ytif ci` into a workflow, and registers the agent guard below for Claude
-Code, Codex, OpenCode, and Pi. It keeps what is already there and adds
-only what is missing, so it can rerun; a file it cannot edit, such as
-JSON with comments or a lefthook configuration that is not YAML, stops it
-before it changes anything. It needs a root `go.mod`, does not lower a
-newer pin, and leaves trusting the hooks in Codex and Pi to the user.
+root and select the agent hosts to configure. It pins that ytif's version
+as a tool, creates the inventory and exemptions, wires `ytif commit` and
+`ytif push` into lefthook and `ytif ci` into a workflow, and registers the
+agent guard for the selected hosts.
+
+```sh
+ytif init --hosts claude-code,codex
+ytif init --hosts opencode,kilo,cursor
+ytif init --hosts none  # gates only
+```
+
+Without `--hosts`, init prompts in a terminal, with existing ytif
+registrations preselected. Noninteractive runs specify `--hosts` explicitly.
+Unselected hosts' files are left as they are; choosing `none` does not
+uninstall earlier registrations. Rerun init with a host selected to refresh
+its plugin or add its missing hook.
+
+It preserves unrelated settings and checks every selected file before
+writing; a file it cannot edit, such as JSON with comments or a lefthook
+configuration that is not YAML, stops it before it changes anything.
+It needs a root `go.mod`, does not lower a newer pin, and leaves each
+host's trust and hook approval to the user.
 Before writing integration files it builds the pinned tool with `go tool -n ytif`.
 If a pin change would leave an active Go vendor tree stale, init stops before
 changing files and gives the pin-and-vendor commands to run before retrying.
@@ -344,8 +358,24 @@ Agents run registered pre-gate commands through `ytif check`; other checks
 are left to the Git hooks and CI that start the gates.
 `ytif guard` is a PreToolUse hook that refuses agent commands that run
 checks. It refuses nothing until an agent's configuration runs it, which
-`ytif init` writes. For Claude Code (`.claude/settings.json`) and Codex
-(`.codex/hooks.json`), that is:
+`ytif init` writes for the hosts you select:
+
+| Host | Project registration |
+|---|---|
+| Claude Code | `.claude/settings.json`, `PreToolUse` |
+| Codex | `.codex/hooks.json`, `PreToolUse` |
+| OpenCode | `.opencode/plugins/ytif-guard.ts`, v1 `server` and v2 `setup` |
+| Kilo Code | `.kilo/plugin/ytif-guard.ts`, current OpenCode-based Kilo |
+| Cursor | `.cursor/hooks.json`, `beforeShellExecution` |
+| Pi | `.pi/extensions/ytif-guard.ts`, `tool_call` |
+
+Orca launches other agents: select the hosts it launches, rather than an
+Orca plugin. Commit the project configuration so new worktrees receive it.
+The Kilo plugin targets the current OpenCode-based CLI and extension.
+The OpenCode plugin uses the default-object entrypoint supported by v1
+from 1.18.29 and targets the v2 2.0.32 `setup` API.
+
+For Claude Code and Codex, the hook is:
 
 ```json
 {
@@ -357,10 +387,30 @@ checks. It refuses nothing until an agent's configuration runs it, which
 }
 ```
 
-For OpenCode and Pi, it writes `integrations/opencode/ytif-guard.ts` to
-`.opencode/plugins/` and `integrations/pi/ytif-guard.ts` to
-`.pi/extensions/`, with its `YTIF` command set to `go tool ytif`. Codex
-runs a project's hooks only after the user trusts them in `/hooks`.
+For Cursor, init merges this native shell hook:
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      { "command": "go tool ytif guard --host cursor" }
+    ]
+  }
+}
+```
+
+`--host cursor` accepts Cursor's `command` and `cwd` payload and returns
+its `permission` and `user_message` response. The refusal rules and records
+are shared with the other hosts.
+
+Init installs the embedded TypeScript plugins with `YTIF` set to
+`["go", "tool", "ytif"]`. Open a new agent session after installation,
+and ensure Go is on that host's PATH, including GUI hosts. Codex hooks
+need approval in `/hooks`, Pi extensions need a trusted project, and
+Cursor project hooks need a trusted workspace. OpenCode and Kilo resolve
+the session directory separately from a shell tool's working-directory
+override, so guard evaluates the command where it will run.
 
 It refuses, directly or through `npx`, a package manager's `exec` or
 `dlx`, or a package binary shorthand such as `pnpm vitest` where the

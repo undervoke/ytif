@@ -1,12 +1,15 @@
 // Package initcmd adopts ytif in a repository: it pins this ytif as a Go
 // tool, writes the inventory and exemptions, wires the gates into lefthook
-// and a workflow, and registers the agent guard with Claude Code, Codex,
-// OpenCode, and Pi. What is already there is kept; what is missing is
-// added. It reads and checks every file before it writes any, so a file it
-// cannot edit stops it with nothing changed.
+// and a workflow, and registers the agent guard with the selected hosts.
+// What is already there is kept; what is missing is added. It reads and
+// checks every file before it writes any, so a file it cannot edit stops it
+// with nothing changed. Host selection only installs or refreshes the
+// selected hosts; unselected host files are left alone without being read
+// for validation.
 package initcmd
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -33,9 +36,20 @@ import (
 )
 
 const (
-	guardCommand = "go tool ytif guard"
-	workflowFile = ".github/workflows/ytif.yml"
+	guardCommand       = "go tool ytif guard"
+	cursorGuardCommand = "go tool ytif guard --host cursor"
+	workflowFile       = ".github/workflows/ytif.yml"
+
+	claudeRel   = ".claude/settings.json"
+	codexRel    = ".codex/hooks.json"
+	cursorRel   = ".cursor/hooks.json"
+	opencodeRel = ".opencode/plugins/ytif-guard.ts"
+	kiloRel     = ".kilo/plugin/ytif-guard.ts"
+	piRel       = ".pi/extensions/ytif-guard.ts"
 )
+
+// hostSlugs are the accepted --hosts values, in display order.
+var hostSlugs = []string{"claude-code", "codex", "opencode", "kilo", "cursor", "pi"}
 
 // file is one file init leaves as want.
 type file struct {
@@ -45,14 +59,19 @@ type file struct {
 }
 
 // Run adopts ytif in the repository at root with self, the running ytif's
-// version, and returns the exit code.
-func Run(root, self string, stdout, stderr io.Writer) int {
+// version, for the hosts from SelectHosts, and returns the exit code. An
+// empty hosts slice installs the gates only.
+func Run(root, self string, hosts []string, stdout, stderr io.Writer) int {
+	selected := hosts
+	if selected == nil {
+		selected = []string{}
+	}
 	pin, err := pinStep(root, self)
 	if err != nil {
 		fmt.Fprintf(stderr, "ytif init: %v\n", err)
 		return gate.ExitUsage
 	}
-	files, errs := plan(root)
+	files, errs := plan(root, selected)
 	if len(errs) > 0 {
 		for _, err := range errs {
 			fmt.Fprintf(stderr, "ytif init: %v\n", err)
@@ -104,9 +123,189 @@ func Run(root, self string, stdout, stderr io.Writer) int {
 	if !lefthookInstalled(root) {
 		fmt.Fprintln(stdout, "\nnote: the git hooks do not run lefthook; run `lefthook install` so commit and push start the gates")
 	}
-	fmt.Fprintln(stdout, "note: Codex runs .codex/hooks.json once you trust its hooks in /hooks, and Pi loads .pi/extensions only in a trusted project")
+	if containsHost(selected, "codex") {
+		fmt.Fprintln(stdout, "note: Codex runs .codex/hooks.json once you trust its hooks in /hooks")
+	}
+	if containsHost(selected, "cursor") {
+		fmt.Fprintln(stdout, "note: Cursor runs .cursor/hooks.json in a trusted workspace with Go and the pinned tool on PATH")
+	}
+	if containsHost(selected, "pi") {
+		fmt.Fprintln(stdout, "note: Pi loads .pi/extensions only in a trusted project")
+	}
+	if len(selected) > 0 {
+		fmt.Fprintln(stdout, "note: open a new session so the selected hosts load the guard")
+	}
 	fmt.Fprintln(stdout, "next: stage the changes and run `ytif list` for the checks that still need contracts")
 	return gate.ExitPass
+}
+
+// SelectHosts resolves the --hosts spec into the hosts init installs. An
+// empty spec prompts on a real terminal with existing ytif registrations
+// preselected; pressing Enter keeps them. It never writes files.
+func SelectHosts(root, spec string, stdin io.Reader, stderr io.Writer) ([]string, error) {
+	if strings.TrimSpace(spec) != "" {
+		return parseHostSpec(spec)
+	}
+	if !isTerminal(stdin) || !isTerminalWriter(stderr) {
+		return nil, errors.New("no --hosts given and no terminal; rerun with --hosts \"claude-code,codex,opencode,kilo,cursor,pi\" or \"none\" (orca has no binding; choose the agent it launches)")
+	}
+	defaults := existingHosts(root)
+	fmt.Fprintln(stderr, "Configure agent hosts (existing ytif registrations are preselected):")
+	for i, slug := range hostSlugs {
+		mark := " "
+		if containsHost(defaults, slug) {
+			mark = "x"
+		}
+		fmt.Fprintf(stderr, "  %d) [%s] %s\n", i+1, mark, slug)
+	}
+	fmt.Fprintln(stderr, "Enter numbers or slugs separated by commas, `none`, or press Enter to keep.")
+	fmt.Fprint(stderr, "hosts> ")
+	line, err := bufio.NewReader(stdin).ReadString('\n')
+	if err != nil && len(line) == 0 {
+		return nil, errors.New("no input; rerun with --hosts \"claude-code,codex,opencode,kilo,cursor,pi\" or \"none\"")
+	}
+	if strings.TrimSpace(line) == "" {
+		return defaults, nil
+	}
+	return parseHostSpec(line)
+}
+
+// parseHostSpec reads comma or space separated numbers or slugs into the
+// canonical host order. It reports unknown names and orca before any write.
+func parseHostSpec(spec string) ([]string, error) {
+	set := map[string]bool{}
+	none := false
+	for _, token := range strings.FieldsFunc(spec, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n'
+	}) {
+		token = strings.TrimSpace(strings.ToLower(token))
+		if token == "" {
+			continue
+		}
+		if token == "none" {
+			none = true
+			continue
+		}
+		if token == "orca" {
+			return nil, errors.New("orca has no binding; choose the host of the agent it launches (for example claude-code, codex, or opencode)")
+		}
+		if n, err := strconv.Atoi(token); err == nil {
+			if n < 1 || n > len(hostSlugs) {
+				return nil, fmt.Errorf("unknown host `%s`; choose from %s or `none`", token, strings.Join(hostSlugs, ", "))
+			}
+			set[hostSlugs[n-1]] = true
+			continue
+		}
+		known := false
+		for _, slug := range hostSlugs {
+			if token == slug {
+				set[slug] = true
+				known = true
+				break
+			}
+		}
+		if !known {
+			return nil, fmt.Errorf("unknown host `%s`; choose from %s or `none`", token, strings.Join(hostSlugs, ", "))
+		}
+	}
+	if none && len(set) > 0 {
+		return nil, errors.New("`none` cannot be combined with host names")
+	}
+	if none {
+		return []string{}, nil
+	}
+	if len(set) == 0 {
+		return nil, fmt.Errorf("no hosts given; choose from %s or `none`", strings.Join(hostSlugs, ", "))
+	}
+	var out []string
+	for _, slug := range hostSlugs {
+		if set[slug] {
+			out = append(out, slug)
+		}
+	}
+	return out, nil
+}
+
+// existingHosts reports the hosts with a detectable ytif registration. It
+// is conservative and read-only: missing or unreadable files only mean the
+// host is not preselected. Detection reuses the planners in canonical order,
+// so preselection matches what plan considers done.
+func existingHosts(root string) []string {
+	out := []string{}
+	if hasJSONGuard(root, claudeRel) {
+		out = append(out, "claude-code")
+	}
+	if hasJSONGuard(root, codexRel) {
+		out = append(out, "codex")
+	}
+	if hasPluginGuard(root, opencodeRel) {
+		out = append(out, "opencode")
+	}
+	if hasPluginGuard(root, kiloRel) {
+		out = append(out, "kilo")
+	}
+	if hasCursorGuard(root) {
+		out = append(out, "cursor")
+	}
+	if hasPluginGuard(root, piRel) {
+		out = append(out, "pi")
+	}
+	return out
+}
+
+// hasJSONGuard reports whether the Claude-style hooks file already runs the
+// ytif guard, reusing the planner's own recognition.
+func hasJSONGuard(root, rel string) bool {
+	f, err := hookConfig(root, rel)
+	return err == nil && f.status == "unchanged"
+}
+
+// hasCursorGuard reports whether the Cursor hooks file already carries the
+// unrestricted ytif guard, reusing the planner's own recognition.
+func hasCursorGuard(root string) bool {
+	f, err := cursorHookConfig(root)
+	return err == nil && f.status == "unchanged"
+}
+
+// hasPluginGuard reports whether a plugin file looks like a ytif guard.
+// The path itself names the ytif guard, so content containing ytif is
+// enough for a conservative preselection.
+func hasPluginGuard(root, rel string) bool {
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), "ytif")
+}
+
+func containsHost(hosts []string, slug string) bool {
+	for _, h := range hosts {
+		if h == slug {
+			return true
+		}
+	}
+	return false
+}
+
+// isTerminal reports whether r is a character device, the existing
+// project's terminal test.
+func isTerminal(r io.Reader) bool {
+	f, ok := r.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := f.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+// isTerminalWriter reports whether w is a character device.
+func isTerminalWriter(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := f.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 type pinPlan struct {
@@ -190,8 +389,9 @@ func pinVendor(root, self string) error {
 }
 
 // plan works out every file and collects every reason one cannot be
-// edited.
-func plan(root string) ([]file, []error) {
+// edited. Gate files are always planned; host files only for selected
+// hosts, so unselected host files are never read or validated.
+func plan(root string, hosts []string) ([]file, []error) {
 	tracked, err := gitx.Tracked(root)
 	if err != nil {
 		return nil, []error{err}
@@ -219,11 +419,24 @@ func plan(root string) ([]file, []error) {
 		actions = workflowActions
 	}
 	add(exemptions(root, actions))
-	for _, p := range []string{".claude/settings.json", ".codex/hooks.json"} {
-		add(hookConfig(root, p))
+	if containsHost(hosts, "claude-code") {
+		add(hookConfig(root, claudeRel))
 	}
-	add(plugin(root, ".opencode/plugins/ytif-guard.ts", integrations.OpenCode))
-	add(plugin(root, ".pi/extensions/ytif-guard.ts", integrations.Pi))
+	if containsHost(hosts, "codex") {
+		add(hookConfig(root, codexRel))
+	}
+	if containsHost(hosts, "opencode") {
+		add(plugin(root, opencodeRel, integrations.OpenCode))
+	}
+	if containsHost(hosts, "kilo") {
+		add(plugin(root, kiloRel, integrations.Kilo))
+	}
+	if containsHost(hosts, "cursor") {
+		add(cursorHookConfig(root))
+	}
+	if containsHost(hosts, "pi") {
+		add(plugin(root, piRel, integrations.Pi))
+	}
 	return files, errs
 }
 
@@ -628,6 +841,122 @@ func hookConfig(root, rel string) (file, error) {
 		return file{}, fmt.Errorf("%s: %w", rel, err)
 	}
 	return compare(root, rel, out)
+}
+
+// cursorHookConfig registers the guard as an unrestricted
+// beforeShellExecution entry in the Cursor hooks file. Cursor entries carry
+// the command directly, unlike the Claude matcher groups, and ytif stays
+// fail-open without failClosed. An existing entry counts only when it runs
+// the guard for Cursor with no type or type command and a matcher that
+// covers every command (absent, empty, or *); a prompt type or a narrower
+// matcher does not count. Only version 1 is edited.
+func cursorHookConfig(root string) (file, error) {
+	data, ok, err := read(root, cursorRel)
+	if err != nil {
+		return file{}, err
+	}
+	if !ok {
+		data = []byte("{}")
+	}
+	top, err := parseObject(data)
+	if err != nil {
+		return file{}, fmt.Errorf("%s: %v; ytif edits plain JSON only", cursorRel, err)
+	}
+	if raw, ok := top.get("version"); ok {
+		var num float64
+		if err := json.Unmarshal(raw, &num); err != nil || num != 1 {
+			return file{}, fmt.Errorf("%s: version %s is not supported; ytif edits version 1 only", cursorRel, string(raw))
+		}
+	}
+	hooks := &object{vals: map[string]json.RawMessage{}}
+	if raw, ok := top.get("hooks"); ok {
+		if hooks, err = parseObject(raw); err != nil {
+			return file{}, fmt.Errorf("%s: hooks: %v", cursorRel, err)
+		}
+	}
+	var list []json.RawMessage
+	if raw, ok := hooks.get("beforeShellExecution"); ok {
+		if err := json.Unmarshal(raw, &list); err != nil {
+			return file{}, fmt.Errorf("%s: hooks.beforeShellExecution is not a list", cursorRel)
+		}
+	}
+	for _, entry := range list {
+		var item struct {
+			Command string `json:"command"`
+			Matcher string `json:"matcher"`
+			Type    string `json:"type"`
+		}
+		if json.Unmarshal(entry, &item) != nil {
+			continue
+		}
+		if (item.Type != "" && item.Type != "command") || (item.Matcher != "" && item.Matcher != "*") || !runsCursorGuard(item.Command) {
+			continue
+		}
+		if _, hasVersion := top.get("version"); hasVersion {
+			return file{path: cursorRel, want: data, status: "unchanged"}, nil
+		}
+		top.set("version", json.RawMessage("1"))
+		out, err := top.indent()
+		if err != nil {
+			return file{}, fmt.Errorf("%s: %w", cursorRel, err)
+		}
+		return compare(root, cursorRel, out)
+	}
+	entry, err := marshal(struct {
+		Command string `json:"command"`
+	}{cursorGuardCommand})
+	if err != nil {
+		return file{}, err
+	}
+	list = append(list, entry)
+	rawList, err := marshal(list)
+	if err != nil {
+		return file{}, err
+	}
+	hooks.set("beforeShellExecution", rawList)
+	rawHooks, err := hooks.MarshalJSON()
+	if err != nil {
+		return file{}, err
+	}
+	top.set("hooks", rawHooks)
+	if _, hasVersion := top.get("version"); !hasVersion {
+		top.set("version", json.RawMessage("1"))
+	}
+	out, err := top.indent()
+	if err != nil {
+		return file{}, fmt.Errorf("%s: %w", cursorRel, err)
+	}
+	return compare(root, cursorRel, out)
+}
+
+// runsCursorGuard reports whether a Cursor beforeShellExecution command
+// runs the ytif guard for Cursor. Cursor sends its own payload shape, so
+// the command must carry the explicit cursor host flag; a bare guard would
+// read the wrong payload and allow the command.
+func runsCursorGuard(command string) bool {
+	f := strings.Fields(command)
+	if len(f) == 0 {
+		return false
+	}
+	trim := func(s string) string { return strings.Trim(s, `"'`) }
+	last := trim(f[len(f)-1])
+	switch {
+	case last == "cursor" && len(f) >= 2 && (trim(f[len(f)-2]) == "--host" || trim(f[len(f)-2]) == "-host"):
+		f = f[:len(f)-2]
+	case last == "--host=cursor" || last == "-host=cursor":
+		f = f[:len(f)-1]
+	default:
+		return false
+	}
+	if len(f) >= 2 {
+		f[len(f)-1] = trim(f[len(f)-1])
+		f[len(f)-2] = trim(f[len(f)-2])
+	}
+	n := len(f)
+	if n < 2 || f[n-1] != "guard" || path.Base(f[n-2]) != "ytif" {
+		return false
+	}
+	return n == 2 || n == 4 && path.Base(trim(f[0])) == "go" && trim(f[1]) == "tool"
 }
 
 // coversBash reports whether a PreToolUse matcher selects the Bash tool:

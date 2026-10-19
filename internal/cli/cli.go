@@ -33,11 +33,11 @@ gates:
 
 other:
   check                  run every project-registered pre-gate command
-  init                   pin this ytif as a Go tool, wire the gates, and register the agent guard
+  init [--hosts LIST]     pin this ytif, wire the gates, and register selected agent hosts
   list                   show managed checks and reconciliation findings
   stats                  show recent elapsed time and hits per check
   board [--out PATH]     write the inventory board as one HTML file and open it
-  guard                  agent PreToolUse hook: refuse agent check runs
+  guard [--host cursor]   agent hook: refuse agent check runs
   allow [DURATION|--off] let agents run checks themselves for DURATION
   update                 replace the ytif on PATH with the latest release
   version                print the version
@@ -68,15 +68,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, version strin
 	case "check":
 		return runCheck(ctx, rest, stdout, stderr)
 	case "init":
-		if len(rest) != 0 {
-			fmt.Fprintf(stderr, "ytif init: takes no arguments\n%s", usageText)
-			return gate.ExitUsage
-		}
-		root, code := repoRoot(stderr)
-		if code != 0 {
-			return code
-		}
-		return initcmd.Run(root, version, stdout, stderr)
+		return runInit(rest, stdin, stdout, stderr, version)
 	case "list":
 		return runList(ctx, rest, stdout, stderr)
 	case "stats":
@@ -84,8 +76,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, version strin
 	case "board":
 		return runBoard(rest, stdout, stderr)
 	case "guard":
-		guard.Run(stdin, stdout, stderr)
-		return gate.ExitPass
+		return runGuard(rest, stdin, stdout, stderr)
 	case "allow":
 		return runAllow(rest, stdout, stderr)
 	case "update":
@@ -368,3 +359,52 @@ type multiFlag []string
 
 func (m *multiFlag) String() string     { return strings.Join(*m, ",") }
 func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
+
+func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer, version string) int {
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	hosts := fs.String("hosts", "", "comma-separated claude-code,codex,opencode,kilo,cursor,pi; none for gates only (default: prompt)")
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return gate.ExitPass
+		}
+		return gate.ExitUsage
+	}
+	if fs.NArg() != 0 {
+		return usageError(stderr, fs, "takes no positional arguments")
+	}
+	root, code := repoRoot(stderr)
+	if code != 0 {
+		return code
+	}
+	selected, err := initcmd.SelectHosts(root, *hosts, stdin, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "ytif init: %v\n", err)
+		return gate.ExitUsage
+	}
+	return initcmd.Run(root, version, selected, stdout, stderr)
+}
+
+func runGuard(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("guard", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	host := fs.String("host", "", "cursor for Cursor's beforeShellExecution format (default: PreToolUse)")
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return gate.ExitPass
+		}
+		return gate.ExitUsage
+	}
+	if fs.NArg() != 0 {
+		return usageError(stderr, fs, "takes no positional arguments")
+	}
+	switch *host {
+	case "", "claude-code", "codex":
+		guard.Run(stdin, stdout, stderr)
+	case "cursor":
+		guard.RunCursor(stdin, stdout, stderr)
+	default:
+		return usageError(stderr, fs, "unknown host: "+*host)
+	}
+	return gate.ExitPass
+}
