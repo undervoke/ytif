@@ -1,0 +1,33 @@
+---
+title: ytif · 등록 명령 전체 실행
+config:
+  look: handDrawn
+  handDrawnSeed: 5
+  theme: dark
+  themeVariables:
+    mainBkg: "#333333"
+    clusterBkg: "#242424"
+  themeCSS: |
+    small { display: inline-block; text-align: left; }
+  flowchart:
+    wrappingWidth: 300
+---
+%% Behavior authority: README.md (Pre-gate commands), internal/cli/cli.go (runCheck), internal/inventory/inventory.go (Commands), internal/checkrun, internal/guard/scripts.go (Inspect), internal/gateconf/build.go, internal/proc, internal/record.
+%% Preflight inspects every registration before starting any. It follows bounded literal shell/package scripts and static TypeScript/Nx settings; Nx affected covers all non-excluded declared projects. Unknown branches pass; admission cannot prove arbitrary code free of hidden builds/tests.
+%% Gates, self-recursion and ytif allow are rejected to preserve the gate and user-allowance boundaries. This lane does not change the agent guard's predicate or execute inventory prepare/discovery.
+%% The scheduler acquires all exclusive tokens atomically. Tokens prevent overlap, not dependencies, ordering or semantic duplication. --jobs bounds top-level entries, not child tool workers.
+%% Ordinary failures do not stop other entries. Ctrl-C cancels running process groups and pending entries; interrupted/unstarted entries produce no completed record. Config/admission/recording errors exit 2, command failure/interruption exits 1, otherwise 0.
+flowchart TB
+  Config["ytif-inventory.yaml · commands<br/><small>• name · run argv<br/>• cwd · exclusive는 선택</small>"]
+  Call["ytif check<br/><small>• 등록 목록 전체 실행<br/>• --jobs 기본값 2</small>"]
+  Inspect["전체 사전 검사<br/><small>• 정적 설정만 읽음<br/>• 식별한 빌드·테스트는 거부<br/>• 해석 못 한 분기는 통과</small>"]
+  Schedule["실행 배치<br/><small>• 동시에 최대 N개 항목<br/>• 같은 exclusive 키는 겹치지 않음</small>"]
+  Execute["각 명령 실행<br/><small>• 지정 cwd 또는 저장소 루트<br/>• 항목 이름으로 로그 구분<br/>• 실패해도 나머지 실행</small>"]
+  Result["결과 집계<br/><small>항목별 성공·실패·소요 시간</small>"]
+  Records["records · check 경로<br/><small>• 완료한 실행만 기록<br/>• ytif stats --gate check</small>"]
+  Gates["기존 gate · checks<br/><small>• 별도 탐색·계약·placement<br/>• check 성공으로 gate 검사 생략 없음</small>"]
+  Config --> Inspect
+  Call --> Inspect --> Schedule --> Execute --> Result --> Records
+  Records -.- Gates
+  classDef em fill:#173d25,stroke:#86efac
+  class Schedule em

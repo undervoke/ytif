@@ -1,6 +1,6 @@
 # Blueprint
 
-ytif의 현재 구조. 각 다이어그램이 하나의 축을 소유하고, 동작 정본은 각 `%%` 주석이 담는다. 기준은 ytif `main` (`5ce043d`, v0.5.0 동작)이고, 정본은 `README.md`와 `internal/`이다. 프로젝트가 고르는 것(placement, prepare 명령, 면제할 step, `--base`와 `--jobs` 값)은 각 프로젝트의 문서가 소유한다.
+ytif의 현재 구조. 각 다이어그램이 하나의 축을 소유하고, 동작 정본은 각 `%%` 주석이 담는다. 정본은 `README.md`와 `internal/`이다. 프로젝트가 고르는 설정은 각 프로젝트의 문서가 소유한다.
 
 ## Diagrams
 
@@ -16,6 +16,12 @@ ytif의 현재 구조. 각 다이어그램이 하나의 축을 소유하고, 동
 gate 하나가 실행되는 순서: `--base` 해석, survey(prepare · 탐색 · inventory 대조 · gate-config), placement 누적 선택, `--base` 축소, 실행, 판정, records.
 
 @import "gates.mermaid"
+
+## check
+
+`commands`에 등록한 명령을 `ytif check`로 실행하는 별도 경로.
+
+@import "check.mermaid"
 
 ## runners
 

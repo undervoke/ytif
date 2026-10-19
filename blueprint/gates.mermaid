@@ -12,7 +12,7 @@ config:
   flowchart:
     wrappingWidth: 300
 ---
-%% Behavior authority: README.md (Gates, The inventory, gate-config paragraphs) and internal/gate (gate.go Run, survey.go NewSurvey, collect.go, present.go), internal/reconcile, internal/gateconf, internal/proc, internal/affected at main 5ce043d (v0.5.0 behavior).
+%% Behavior authority: README.md (Gates, The inventory, gate-config paragraphs) and internal/gate (gate.go Run, survey.go NewSurvey, collect.go, present.go), internal/reconcile, internal/gateconf, internal/proc, internal/affected.
 %% ytif list runs the same survey (list.go) and stops there.
 %% --jobs N bounds the processes ytif starts through proc.Run across preparation, discovery, narrowing and dispatch (gate.go:72); workers inside a started tool are the project's configuration. Preparation and narrowing run alone, before and after discovery.
 %% Findings do not short-circuit dispatch; a selected check whose run would also run an unselected check is held back without an outcome. The verdict fails on any finding, failed check, check without an outcome, invocation error, or run problem (present.go:107-109).
@@ -23,7 +23,7 @@ flowchart TB
   subgraph Survey["survey · ytif list도 여기까지"]
     Prepare["inventory prepare<br/><small>• 저장소 루트에서 순서대로<br/>• 실패한 명령은 그 runner의 탐색 실패</small>"]
     Discover["탐색<br/><small>• 모든 runner 동시<br/>• gate와 무관<br/>• Git 추적 파일만</small>"]
-    Reconcile["inventory 대조<br/><small>• managed 검사: 발견되고 inventory에 있고 placement가 유효한 검사<br/>• 어긋남은 finding</small>"]
+    Reconcile["checks 대조<br/><small>• managed 검사: 발견되고 checks에 있고 placement가 유효한 검사<br/>• 어긋남은 finding</small>"]
     GateConf["gate-config<br/><small>• lefthook · .github/workflows의 step<br/>• ytif 호출 또는 면제 목록 일치<br/>• 테스트 runner 직접 실행은 면제 불가<br/>• 분류 불가 명령</small>"]
     Prepare --> Discover --> Reconcile --> GateConf
   end
