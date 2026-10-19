@@ -1,5 +1,5 @@
 ---
-title: ytif · runner 8개의 검사 발견
+title: ytif · discovery across eight runners
 config:
   look: handDrawn
   handDrawnSeed: 5
@@ -16,21 +16,21 @@ config:
 %% Discovery reads Git-tracked files only; test names must be static, and what ytif cannot list exactly fails discovery.
 %% Function signatures, provided values and per-runner unit/name live in README.md (Checks).
 flowchart LR
-  subgraph Test["test runner 6개 · --base 축소 대상"]
-    GoTest["go-test<br/><small>TestXxx · FuzzXxx · 출력 있는 example</small>"]
-    BunTest["bun-test<br/><small>bun:test를 import하는 *.test.*</small>"]
-    NodeTest["node-test<br/><small>node:test를 import하는 *.test.*</small>"]
-    Dotnet["dotnet-test<br/><small>Microsoft.NET.Test.Sdk를 참조하는 .csproj</small>"]
-    Vitest["vitest-test<br/><small>vitest list 결과</small>"]
-    Playwright["playwright-test<br/><small>playwright test --list 결과</small>"]
+  subgraph Test["Six test runners · eligible for --base narrowing"]
+    GoTest["go-test<br/><small>TestXxx · FuzzXxx · examples with output</small>"]
+    BunTest["bun-test<br/><small>*.test.* importing bun:test</small>"]
+    NodeTest["node-test<br/><small>*.test.* importing node:test</small>"]
+    Dotnet["dotnet-test<br/><small>.csproj referencing Microsoft.NET.Test.Sdk</small>"]
+    Vitest["vitest-test<br/><small>vitest list output</small>"]
+    Playwright["playwright-test<br/><small>playwright test --list output</small>"]
   end
-  subgraph Verify["verify runner 2개 · 축소 없음"]
-    GoVerify["go-verify<br/><small>//go:build verification 파일의 VerifyXxx</small>"]
-    NodeVerify["node-verify<br/><small>*.verify.mjs의 export된 verifyXxx</small>"]
+  subgraph Verify["Two verify runners · never narrowed"]
+    GoVerify["go-verify<br/><small>VerifyXxx in //go:build verification files</small>"]
+    NodeVerify["node-verify<br/><small>exported verifyXxx in *.verify.mjs</small>"]
   end
-  Key["검사 key = runner:unit:name<br/><small>• unit: package · 파일 · .csproj<br/>• name: 함수 · suite &gt; test</small>"]
-  JsBin["프로젝트의 node_modules/.bin으로 실행<br/><small>의존성 설치와 빌드가 먼저 필요</small>"]
-  Findings["finding은 path:line: message<br/><small>실패는 Go error 반환 · Node throw</small>"]
+  Key["Check key = runner:unit:name<br/><small>• unit: package · file · .csproj<br/>• name: function · suite &gt; test</small>"]
+  JsBin["Run through project node_modules/.bin<br/><small>requires dependencies and builds to be ready</small>"]
+  Findings["finding: path:line: message<br/><small>failure: Go error return · Node throw</small>"]
   Test -.- Key
   Verify -.- Key
   Vitest -.- JsBin
