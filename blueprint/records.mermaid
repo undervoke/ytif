@@ -12,10 +12,10 @@ config:
   flowchart:
     wrappingWidth: 270
 ---
-%% Behavior authority: internal/gate/gate.go (recordLines, writeRecords), internal/record/record.go, internal/cli/cli.go (runBoard), internal/board/board.go (Render), .github/workflows/ci.yml and README.md (Board).
+%% Behavior authority: internal/gate/gate.go (recordLines, writeRecords), internal/record/record.go, internal/cli/cli.go (runBoard), internal/board/board.go (Render), .github/workflows/ci.yml and README.md (Records and board).
 %% CI upload is configured by the host workflow; ytif itself writes a local file. Artifact retention is also host-owned.
 %% The record append occurs at gate finalization, including ordinary failures. An early exit or forced termination may leave no records; interrupted work has no completed result.
-%% The board reads explicit --records paths or the default local file, never an implicit union or a remembered download.
+%% The board reads the --records paths when given, and the default local file otherwise.
 flowchart LR
   subgraph Host["CI · host workflow owns upload and retention"]
     CIGate["ytif ci<br/><small>Workflow sets the mode and the record path</small>"]
@@ -31,10 +31,10 @@ flowchart LR
     Download@{ shape: doc, label: "Downloaded JSONL<br/><small>Saved by the developer</small>" }
     Registry@{ shape: docs, label: "Current verification registry<br/><small>Root file and its includes</small>" }
     Board["ytif board<br/><small>Joins history to current verifications by key</small>"]
-    HTML@{ shape: doc, label: "board.html<br/><small>• Static snapshot, no remote fetch<br/>• Recorded selection, not recomputed<br/>• Opens by default; --out only writes</small>" }
+    HTML@{ shape: doc, label: "board.html<br/><small>• Static snapshot<br/>• Shows each run's recorded selection<br/>• Opens by default; --out only writes</small>" }
     LocalGate -->|Append at finalization| Default
-    Default -->|Only without --records| Board
-    Download -->|Only the --records paths| Board
+    Default -->|Default| Board
+    Download -->|Given as --records| Board
     Registry --> Board --> HTML
   end
 
