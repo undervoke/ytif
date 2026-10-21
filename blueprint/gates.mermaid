@@ -1,5 +1,5 @@
 ---
-title: ytif · gate execution
+title: ytif · gate selection and execution
 config:
   look: handDrawn
   handDrawnSeed: 5
@@ -10,41 +10,45 @@ config:
   themeCSS: |
     small { display: inline-block; text-align: left; }
   flowchart:
-    wrappingWidth: 300
+    wrappingWidth: 270
 ---
-%% Behavior authority: README.md (Gates, The inventory, gate-config paragraphs) and internal/gate (gate.go Run, survey.go NewSurvey, collect.go, present.go), internal/reconcile, internal/gateconf, internal/proc, internal/affected.
-%% ytif list runs the same survey (list.go) and stops there.
-%% --jobs N bounds the processes ytif starts through proc.Run across preparation, discovery, narrowing and dispatch (gate.go:72); workers inside a started tool are the project's configuration. Preparation and narrowing run alone, before and after discovery.
-%% Findings do not short-circuit dispatch; a selected check whose run would also run an unselected check is held back without an outcome. The verdict fails on any finding, failed check, check without an outcome, invocation error, or run problem (present.go:107-109).
-%% Early errors (unknown gate, unresolved --base, unreadable inventory or exemptions, unreadable file scope) exit 2 without records; a records write failure also exits 2.
-%% Narrowing drops only test-runner checks whose unit lies in an Nx project the changes since the merge base do not affect; verify checks and units outside every project stay. Without nx.json or a graph, nothing is narrowed.
+%% Behavior authority: internal/gate/gate.go (Run), internal/gate/survey.go, internal/affected/affected.go and README.md (Gates).
+%% Invalid input exits before record creation. Admission findings skip project execution but still reconcile and record an incomplete failed attempt.
+%% Affected selection covers registered work, not a complete census. A valid empty result does not trigger fallback; unresolved verification scopes still run.
+%% list uses complete discovery separately. A full local gate activates only sources owning selected members; effective-full CI activates every source.
 flowchart TB
-  Base["Resolve --base<br/><small>• when ci --base is set<br/>• merge-base<br/>• exit 2 on failure</small>"]
-  subgraph Survey["Survey · ytif list stops here"]
-    Prepare["inventory prepare<br/><small>• sequentially from repository root<br/>• a failed command fails its runners' discovery</small>"]
-    Discover["Discovery<br/><small>• all runners concurrently<br/>• independent of gate selection<br/>• Git-tracked files only</small>"]
-    Reconcile["Reconcile checks<br/><small>• managed: discovered, inventoried, valid placement<br/>• mismatches become findings</small>"]
-    GateConf["gate-config<br/><small>• lefthook and workflow steps<br/>• ytif call or matching exemption<br/>• direct test runs cannot be exempted<br/>• unclassified commands become findings</small>"]
-    Prepare --> Discover --> Reconcile --> GateConf
-  end
-  Select["Cumulative placement selection<br/><small>• managed checks only<br/>• commit ⊂ push ⊂ ci</small>"]
-  Narrow["Narrow with --base<br/><small>• when ci --base is set<br/>• test runners only<br/>• Nx affected<br/>• no graph means no narrowing</small>"]
-  Dispatch["Dispatch<br/><small>• runners execute concurrently<br/>• results printed in runner order</small>"]
-  Verdict["Verdict<br/><small>any finding, failure, missing outcome or error fails the gate</small>"]
-  Records["Append records<br/><small>exit 2 on write failure</small>"]
-  Jobs["--jobs N<br/><small>• concurrent processes started through proc.Run<br/>• shared across prepare, discovery, narrowing and dispatch<br/>• excludes git, go env, go mod edit and tool-internal workers</small>"]
-  subgraph Scope["File scope · verify input, not a test filter"]
-    C["ytif commit<br/><small>staged files</small>"]
-    P["ytif push<br/><small>files changed by pushed refs</small>"]
-    I["ytif ci<br/><small>all tracked files</small>"]
-  end
-  Base --> Prepare
-  GateConf --> Select --> Narrow --> Dispatch --> Verdict --> Records
-  Reconcile -.->|finding| Verdict
-  GateConf -.->|finding| Verdict
-  Jobs -.- Survey
-  Jobs -.- Narrow
-  Jobs -.- Dispatch
-  Dispatch -.- Scope
+  Input["Validate configuration and revisions<br/><small>Admission runs before project execution</small>"]
+  Invalid["Report input or load error<br/><small>No records are written</small>"]
+  Rejected["Reconcile admission findings<br/><small>No Nx, preparation, discovery or execution</small>"]
+  Members["Gate members<br/><small>• check and commit opt in independently<br/>• push includes all except skip-push<br/>• CI includes all verifications</small>"]
+  Mode{"Affected requested?<br/><small>Host supplies the comparison base</small>"}
+  Nx{"Usable Nx result?"}
+  Full["Keep all gate members<br/><small>Effective mode: full</small>"]
+  Affected["Keep affected and unresolved members<br/><small>Commands have unknown dependency scope</small>"]
+  Census{"CI with effective full mode?"}
+  All["Activate every source<br/><small>Complete discovery, including unregistered work</small>"]
+  Selected["Activate selected sources<br/><small>Inactive sources are not judged missing or stale</small>"]
+  Discover["Prepare and discover<br/><small>Only active sources need preparation</small>"]
+  Reconcile["Reconcile and restore co-runs<br/><small>Required partners must share gate membership</small>"]
+  Run["Execute runnable selections<br/><small>Shared process limit and command-exclusive tokens</small>"]
+  Finish["Aggregate verdict and append records<br/><small>Keep outcomes distinct from selection and omission</small>"]
+
+  Input -->|Invalid input or load failure| Invalid
+  Input -->|Admission rejected| Rejected
+  Rejected -->|Incomplete failed attempt| Finish
+  Input -->|Admitted| Members
+  Members --> Mode
+  Mode -->|No| Full
+  Mode -->|Yes| Nx
+  Nx -->|Unavailable or failed: record fallback| Full
+  Nx -->|Valid, including empty| Affected
+  Full --> Census
+  Affected --> Census
+  Census -->|Yes, including fallback| All
+  Census -->|No| Selected
+  All --> Discover
+  Selected --> Discover
+  Discover --> Reconcile --> Run --> Finish
+
   classDef em fill:#173d25,stroke:#86efac
-  class Verdict em
+  class Affected,Census em

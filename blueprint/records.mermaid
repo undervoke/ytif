@@ -1,0 +1,64 @@
+---
+title: ytif · records from execution to board
+config:
+  look: classic
+  theme: dark
+  themeVariables:
+    actorBkg: "#333333"
+    labelBoxBkgColor: "#fcd34d"
+    labelTextColor: "#000000"
+    noteTextColor: "#e0e0e0"
+  themeCSS: |
+    /* collections · file */
+    rect.actor:not([rx]) { fill: #3d3415; stroke: #fcd34d; }
+  sequence:
+    actorMargin: 80
+    width: 200
+    wrap: true
+---
+%% Behavior authority: internal/gate/gate.go (recordLines, writeRecords), internal/record/record.go, internal/cli/cli.go (runBoard), internal/board/board.go (Render), .github/workflows/ci.yml and README.md (Board).
+%% CI upload is configured by the host workflow; ytif itself writes a local file. Artifact retention is also host-owned.
+%% The record append occurs at gate finalization, including ordinary failures. An early exit or forced termination may leave no records; interrupted work has no completed result.
+%% The board reads explicit --records paths or the default local file, never an implicit union or a remembered download.
+sequenceDiagram
+  participant CI as CI workflow<br/>runs ytif
+  participant CIFile@{ "type": "collections", "alias": "Runner-local records" }
+  participant Artifacts as GitHub Actions<br/>artifacts
+  actor User as Developer
+  participant Local as Local ytif<br/>gates and board
+  participant Files@{ "type": "collections", "alias": "Local repository and files" }
+
+  CI->>CI: Run ytif ci in the host-selected mode
+  CI->>CIFile: Gate finalization: append one JSONL batch
+  Note over CI,CIFile: • Results, timings and selection<br/>• Full output stays in the CI console
+  opt Host workflow reaches its upload step
+    CI->>CIFile: Read the configured record file, if present
+    CIFile-->>CI: JSONL
+    CI->>Artifacts: Upload ytif-records, also after a failed gate
+  end
+
+  opt Local gate execution
+    User->>Local: Run check, commit, push or ci locally
+    Local->>Files: At finalization, append default common-dir records
+    Note over Local,Files: • Worktrees share local records<br/>• --records overrides the destination
+  end
+
+  opt Developer retrieves CI records
+    User->>Artifacts: Select a workflow run and download its artifact
+    Artifacts-->>User: Record file
+    User->>Files: Save the downloaded JSONL
+  end
+
+  User->>Local: Run ytif board
+  alt Explicit --records paths
+    Local->>Files: Read only the specified local JSONL files
+  else No --records flag
+    Local->>Files: Read common-dir/ytif/records.jsonl
+  end
+  Files-->>Local: Outcomes, timing and available selection metadata
+  Local->>Files: Read the current verification registry and includes
+  Files-->>Local: Current membership, contracts and relations
+  Local->>Local: Join by verification key and aggregate history
+  Local->>Files: Write a static board.html snapshot
+  Local-->>User: Open the page by default<br/>--out writes only
+  Note over Local,Files: • HTML is a static snapshot<br/>• No remote fetch<br/>• No affected/full diagnosis

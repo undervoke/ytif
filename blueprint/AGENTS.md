@@ -1,30 +1,30 @@
 # Blueprint
 
-ytif's current architecture. Each diagram owns one view; its leading `%%` comments identify the behavior authority in `README.md` and `internal/`. Project-specific configuration belongs in that project's documentation.
+<!-- dinyd-lock -->
+Project documents are not diaries.
+Before writing a Mermaid diagram, read [diagram-examples/AGENTS.md](diagram-examples/AGENTS.md); it holds the diagram rules and one example per type.
 
-## Diagrams
+## Document · Diagram · Code ownership
 
-- `.mermaid` only; MPE `@import` treats `.mmd` as plain code. Palette targets the VS Code dark background `#1f1f1f`.
-- Leading `%%` names the behavior authority.
-- English prose and diagram labels; identifiers verbatim. Frontmatter `title`; group titles instead of legends.
-- Node: `heading<br/><small>detail</small>`. Two or more distinct statements: one `• ` line each; one `A → B → C` chain stays one line.
-- Achromatic by default. Color only for `em` (focus), `issue` (observed defect), `legacy` (superseded), and infrastructure kinds `db` · `cache` · `queue` · `file` · `ext`. No per-node `style`, so palette edits stay in `classDef` and frontmatter.
-- Copy frontmatter and `classDef`s from an existing diagram of the same type.
+- Documents own decisions, rationale, and intended boundaries that cannot be inferred from code.
+- Diagrams explain cross-file and process relationships at an abstraction level that avoids copying code literals.
+- Code owns implementation facts; link to their source instead of maintaining parallel inventories or configuration values.
+- Topic documents import their diagrams.
+- Keep each independently reviewable claim on its own physical line.
+<!-- /dinyd-lock -->
 
 ## gates
 
-Gate execution: resolve `--base`, survey (prepare, discovery, inventory reconciliation, gate-config), cumulative placement selection, narrowing, dispatch, verdict, records.
+Gate execution selects membership and affected scope before preparing and discovering active runners.
+List and effective-full CI perform complete reconciliation; every other gate run reconciles only the sources it activated.
+Dispatch closes required co-runs within gate membership, then produces verdicts and shared selection/result records.
 
 @import "gates.mermaid"
 
-## check
+## records
 
-The separate execution path from registered `commands` through `ytif check`.
+Gate names describe verification membership independently of the execution environment.
+The host workflow owns CI artifact publication and retention; the developer supplies downloaded records to the board.
+The board combines the current registry with the chosen record files into a static snapshot.
 
-@import "check.mermaid"
-
-## runners
-
-Discovery sources and check keys for the eight runners: six test runners and two verify runners.
-
-@import "runners.mermaid"
+@import "records.mermaid"
