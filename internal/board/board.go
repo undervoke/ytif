@@ -243,8 +243,7 @@ func nonNil(s []string) []string {
 // total is the elapsed time its runs recorded. Selection lines share the
 // run's attempt, time, gate and context, so a run with zero selections
 // still counts as an attempt and an omission never becomes a pass or a
-// zero-duration result. Hits come from record.Stats, so the board and ytif
-// stats count alike.
+// zero-duration result.
 func aggregate(lines []record.Line, meta *metaOut) (map[string]*checkStats, []invocationOut, map[string]*orphanOut, []selectionOut) {
 	stats := map[string]*checkStats{}
 	orphans := map[string]*orphanOut{}
@@ -397,13 +396,12 @@ func aggregate(lines []record.Line, meta *metaOut) (map[string]*checkStats, []in
 	}
 	sort.SliceStable(selections, func(i, j int) bool { return selections[i].Time.Before(selections[j].Time) })
 
-	checks, _, _ := record.Stats(lines, record.Filter{}, 0)
-	for _, c := range checks {
-		if s := stats[c.Key]; s != nil {
-			s.Hits += c.Hits
+	for k, n := range record.Hits(lines) {
+		if s := stats[k]; s != nil {
+			s.Hits = n
 		}
-		if o := orphans[c.Key]; o != nil {
-			o.Hits += c.Hits
+		if o := orphans[k]; o != nil {
+			o.Hits = n
 		}
 	}
 

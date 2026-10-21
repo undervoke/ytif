@@ -36,7 +36,6 @@ other:
   migrate                convert the legacy inventory to ytif-verifications.yaml
   init [--hosts LIST]     pin this ytif, wire gates, and register selected agent hosts
   list                   show verifications and reconciliation findings
-  stats                  show recent elapsed time and hits per verification
   board [--out PATH]     write the verification board as one HTML file and open it
   guard [--host cursor]   agent hook: refuse direct verification runs
   allow [DURATION|--off] let agents run verifications themselves for DURATION
@@ -84,8 +83,6 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, version strin
 		return runInit(rest, stdin, stdout, stderr, version)
 	case "list":
 		return runList(ctx, rest, stdout, stderr)
-	case "stats":
-		return runStats(rest, stdout, stderr)
 	case "board":
 		return runBoard(rest, stdout, stderr)
 	case "guard":
@@ -152,59 +149,6 @@ func runList(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 	return gate.List(ctx, root, sources(), configChecker(), stdout, stderr, *summary)
-}
-
-func runStats(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("stats", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	last := fs.Int("last", 20, "average over the last N observations of each check")
-	gateName := fs.String("gate", "", "only this lane (check, commit, push, ci)")
-	ctxName := fs.String("context", "", "only this context (local, ci, agent)")
-	var paths multiFlag
-	fs.Var(&paths, "records", "record file to read (repeatable); default: local records")
-	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
-		return usageError(stderr, fs, "takes no arguments")
-	}
-	if len(paths) == 0 {
-		root, code := repoRoot(stderr)
-		if code != 0 {
-			return code
-		}
-		common, err := gitx.CommonDir(root)
-		if err != nil {
-			fmt.Fprintf(stderr, "ytif: %v\n", err)
-			return gate.ExitUsage
-		}
-		paths = multiFlag{record.DefaultPath(common)}
-	}
-	lines, malformed, err := record.Read(paths)
-	if err != nil {
-		fmt.Fprintf(stderr, "ytif: %v\n", err)
-		return gate.ExitUsage
-	}
-	checks, invs, guards := record.Stats(lines, record.Filter{Gate: *gateName, Context: *ctxName}, *last)
-	avgHead := fmt.Sprintf("AVG(last %d)", *last)
-	fmt.Fprintf(stdout, "%-6s %-6s %-12s %-7s %-7s %s\n", "RUNS", "HITS", avgHead, "GATE", "CONTEXT", "VERIFICATION")
-	for _, c := range checks {
-		fmt.Fprintf(stdout, "%-6d %-6d %-12s %-7s %-7s %s\n", c.Runs, c.Hits, avg(c.AvgMS), c.Gate, c.Context, c.Key)
-	}
-	if len(invs) > 0 {
-		fmt.Fprintf(stdout, "\n%-6s %-12s %-7s %-7s %s\n", "RUNS", avgHead, "GATE", "CONTEXT", "INVOCATION")
-		for _, i := range invs {
-			fmt.Fprintf(stdout, "%-6d %-12s %-7s %-7s %s\n", i.Runs, avg(i.AvgMS), i.Gate, i.Context,
-				strings.TrimSpace(i.Runner+" "+i.What+" "+i.Unit))
-		}
-	}
-	if len(guards) > 0 {
-		fmt.Fprintf(stdout, "\n%-9s %-7s %s\n", "REFUSALS", "CONTEXT", "GUARDED RUNNER")
-		for _, g := range guards {
-			fmt.Fprintf(stdout, "%-9d %-7s %s\n", g.Refusals, g.Context, g.Runner)
-		}
-	}
-	if malformed > 0 {
-		fmt.Fprintf(stderr, "ytif: skipped %d malformed record lines\n", malformed)
-	}
-	return gate.ExitPass
 }
 
 func runBoard(args []string, stdout, stderr io.Writer) int {
@@ -339,16 +283,6 @@ func pipedStdin(r io.Reader) bool {
 	}
 	info, err := f.Stat()
 	return err == nil && info.Mode()&os.ModeCharDevice == 0
-}
-
-func avg(ms *float64) string {
-	switch {
-	case ms == nil:
-		return "-"
-	case *ms < 1:
-		return "<1ms"
-	}
-	return time.Duration(*ms * float64(time.Millisecond)).Round(time.Millisecond).String()
 }
 
 type multiFlag []string

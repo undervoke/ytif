@@ -204,12 +204,12 @@ entries:
 
 Each gate run appends its results, timings, and selection to
 `<git-common-dir>/ytif/records.jsonl`, or to `--records PATH`.
-`ytif list` shows verifications and findings; `ytif stats` shows recorded time
-and hits, where a hit is a run of consecutive fails that a pass ends.
+`ytif list` shows verifications and findings.
 
 `ytif board` writes the ledger and its records as one HTML file and opens it;
 `--out PATH` only writes it, and `--records PATH` reads the given record files,
-such as a downloaded CI artifact.
+such as a downloaded CI artifact. A hit on the board is a run of consecutive
+fails that a pass ends.
 
 ## Agent guard
 
