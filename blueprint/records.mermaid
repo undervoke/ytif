@@ -12,7 +12,7 @@ config:
   flowchart:
     wrappingWidth: 270
 ---
-%% Behavior authority: internal/gate/gate.go (recordLines, writeRecords), internal/record/record.go, internal/cli/cli.go (runBoard), internal/board/board.go (Render), .github/workflows/ci.yml and README.md (Records and board).
+%% Behavior authority: internal/gate/gate.go (recordLines, writeRecords), internal/record/record.go, internal/cli/cli.go (runGate, runBoard), internal/board/board.go (Render), .github/workflows/ci.yml and README.md (Records and board).
 %% CI upload is configured by the host workflow; ytif itself writes a local file. Artifact retention is also host-owned.
 %% Recording-enabled runs append at gate finalization, including ordinary failures. An early exit or forced termination may leave no records; interrupted work has no completed result.
 %% The board reads the --records paths when given, and the default local file otherwise.

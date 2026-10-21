@@ -205,7 +205,7 @@ entries:
 
 ## Records and board
 
-Agent-invoked `ytif check` and lefthook's `ytif commit --hook` / `ytif push --hook`
+`ytif check` and lefthook's `ytif commit --hook` / `ytif push --hook`
 append results, timings, and selection to `<git-common-dir>/ytif/records.jsonl`;
 `--records PATH` selects another destination. Remote CI workflows record with
 `ytif ci --records PATH` and publish that file as an artifact.
