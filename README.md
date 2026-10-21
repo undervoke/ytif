@@ -2,12 +2,14 @@
 
 > Built for my own projects; issues and pull requests are closed. Fork freely.
 
-`ytif` keeps every check a project owns — tests and custom checks — on one
-rail. Each check carries a contract that says why it exists and when to
-delete it, runs at the gate its cost earns, and leaves a record of what it
-cost. Checks without a contract, contracts without a check, gate steps that
-run tests around the rail, and other gate steps that run code outside ytif
-without a stated reason fail the gate.
+`ytif` keeps every verification a project owns — tests, custom checks, and
+direct commands — on one rail. Each verification belongs to CI and, unless
+skipped, to push; `check` and `commit` are independent opt-ins. Discovered
+verifications carry a contract that says why they exist and when to delete
+them, and leave a record of what they cost. Verifications without a contract,
+contracts without a verification, gate steps that run tests around the rail,
+and other gate steps that run code outside ytif without a stated reason fail
+the gate.
 
 ## Install
 
@@ -50,6 +52,15 @@ Unselected hosts' files are left as they are; choosing `none` does not
 uninstall earlier registrations. Rerun init with a host selected to refresh
 its plugin or add its missing hook.
 
+Init uses Prettier from the repository's `node_modules/.bin` to format only
+files it creates or updates, following the project's configuration and
+ignore rules. Generated plugins are formatted before comparison, so a rerun
+preserves an identical project-formatted copy. Formatting runs through stdin
+from the repository root before any writes and reports the tool and target
+path; a formatter error stops init before the pin or integration files change.
+When Prettier is absent, init uses its generated formatting. If Biome is also
+installed, init reports the ambiguity and skips automatic formatting.
+
 It preserves unrelated settings and checks every selected file before
 writing; a file it cannot edit, such as JSON with comments or a lefthook
 configuration that is not YAML, stops it before it changes anything.
@@ -68,9 +79,10 @@ discovered check without a contract and every gate step that bypasses the
 rail is a finding, and the gates fail until none remain. Write the
 contracts and exemptions and rerun `ytif list`.
 
-## Checks
+## Verifications
 
-Gate checks are discovered, never registered by hand. A key is `runner:unit:name`:
+Test and verify verifications are discovered, never registered by hand. Direct
+commands are self-registered in the ledger. A key is `runner:unit:name`:
 
 | Runner | Discovered from | Unit | Name |
 |---|---|---|---|
@@ -81,8 +93,9 @@ Gate checks are discovered, never registered by hand. A key is `runner:unit:name
 | `dotnet-test` | `.csproj` referencing `Microsoft.NET.Test.Sdk` | `.csproj` path | method |
 | `vitest-test` | `vitest list` of each `vitest.config.*`, or a `vite.config.*` that mentions vitest | test file | `suite > test` |
 | `playwright-test` | `playwright test --list` of each `playwright.config.*` | spec file | `describe > test` |
+| `command` | ledger `run` argv | `cwd` or `.` | entry `name` |
 
-A Go check uses only standard-library types:
+A Go verification uses only standard-library types:
 
 ```go
 func VerifyXxx(ctx context.Context, [files []string], [provided...], w io.Writer) error
@@ -105,21 +118,21 @@ workflow commands it writes, such as `::warning`, reach GitHub.
 Test names must be static; what ytif cannot list exactly fails discovery.
 
 Discovery reads Git-tracked files only, so an untracked new test stays
-invisible until staged. `ytif list` and every gate discover all runners
-whatever the placement, and .NET discovery builds the test projects. A .NET
+invisible until staged. `ytif list` and full gates discover eligible runners
+whatever the gate, and .NET discovery builds the test projects. A .NET
 project whose discovered methods are all selected runs without a filter; a
 filter too long for one command line is split across several runs.
 
 Vitest and Playwright are listed by the project's own `node_modules/.bin`
 binary from each config's directory, so their discovery needs the
 dependencies installed and whatever the test files import built. A test
-that several projects run is one check, and a name repeated within one file
+that several projects run is one verification, and a name repeated within one file
 and project fails discovery. A Vitest config's listing is cached in the git
 common directory by the tracked paths, the files under the config's
 directory, the lockfiles, and the listed test files; a test name computed
 from any other file refreshes only when one of those changes.
 
-What discovery and runs need generated or built first, the inventory
+What discovery and runs need generated or built first, the ledger
 declares as preparation. Every `ytif list` and gate runs each command in
 order from the repository root before discovery, and a failed command fails
 discovery of its runners:
@@ -130,50 +143,53 @@ prepare:
     run: [pnpm, exec, nx, run-many, -t, prepare]
 ```
 
-## Pre-gate commands
+## The check gate
 
-`ytif check --jobs 4` runs every command registered under `commands:` in
-`ytif-inventory.yaml`, without gate preparation or test discovery. Agents
-may run this command. Projects choose what is useful here; ytif does not
-admit commands by a tool allowlist or an elapsed-time threshold.
-
-```yaml
-version: 2
-commands:
-  - name: formatting
-    run: [pnpm, exec, prettier, --list-different, .]
-  - name: maps
-    run: [node, tools/maps/env.mjs, --check]
-    exclusive: [maps]
-  - name: catalog
-    run: [node, tools/catalog/cli.mjs, --check]
-checks: []
-```
-
-Each entry has a unique `name` and a `run` argv. `cwd` optionally changes
-its directory from the repository root. `exclusive` is an optional list of
-resource names: entries sharing a name never overlap. The project owns
-these declarations; tokens express mutual exclusion, not dependencies,
-ordering, or duplicate-work detection. `--jobs N` bounds concurrently
-running entries, not workers inside their tools; it defaults to 2,
-and `--jobs 1` runs sequentially in list order. There is no subset
+`ytif check` runs the ledger verifications with `check: true`, through the same
+selection, record, and board model as the other gates. Agents may run this
+command; it never invokes another gate through the check lane. `--jobs N`
+bounds concurrently running entries, not workers inside their tools; it
+defaults to 2, while the other gates default to the CPU count. With
+`--jobs 1` entries run sequentially in ledger order. There is no subset
 selection. Independent entries run even after another fails. Output is
 prefixed by entry name, followed by a result and elapsed time for each.
 Ctrl-C cancels running process groups and stops pending entries.
 
-Before starting any entry, ytif reads the entire list and rejects known
-test runners, explicit build commands, and package/Make/Nx tasks with a
-`test` or `build` word in their names. This keeps builds and tests at the
-gates. It also rejects calls to ytif gates, to `check` itself (recursion),
-and to `allow` (the user's exception mechanism). It follows literal shell
-wrappers and package scripts with their arguments and lifecycle hooks,
-using the same bounded traversal as the agent guard. For Nx it reads
-`project.json`, `package.json` Nx targets/scripts, and `nx.json` target
+```yaml
+version: 3
+verifications:
+  - runner: command
+    name: formatting
+    run: [pnpm, exec, prettier, --list-different, .]
+    check: true
+  - runner: command
+    name: maps
+    run: [node, tools/maps/env.mjs, --check]
+    exclusive: [maps]
+    check: true
+```
+
+Command entries keep their `name`, `run`, `cwd`, and `exclusive` fields.
+`cwd` optionally changes the directory from the repository root. `exclusive`
+names resources that never overlap across gate runs at any job count. Tokens
+express mutual exclusion, not dependencies, ordering, or duplicate-work
+detection.
+
+Before starting any entry, ytif reads the entire check selection and rejects
+test-runner kinds and `go-verify` by kind: tests belong at the gates, and
+`go-verify` needs its dispatcher `go build`. Direct commands and applicable
+`prepare` argv go through the existing bounded static inspector, which rejects
+known test runners, explicit build commands, and package/Make/Nx tasks with a
+`test` or `build` word in their names. It also rejects calls to ytif gates, to
+`check` itself (recursion), and to `allow` (the user's exception mechanism).
+It follows literal shell wrappers and package scripts with their arguments and
+lifecycle hooks, using the same bounded traversal as the agent guard. For Nx it
+reads `project.json`, `package.json` Nx targets/scripts, and `nx.json` target
 settings, following explicit target dependencies and declared package or
 implicit project edges. `nx affected` is inspected against every non-excluded
 static project, since future diffs may select any of them. Build/test-named
 dependencies are rejected by name even when no current dependency matches;
-register the direct check command when that task name obscures a pure check.
+register the direct command when that task name obscures a pure check.
 It does not execute Nx or its plugins to classify commands. Inferred targets,
 workspace packages without `project.json` or `package.json` Nx metadata,
 import-inferred edges, computed options, changed/unknown directories, and
@@ -182,48 +198,75 @@ TypeScript emission checks read strict-JSON configs and relative `extends`;
 JSONC and package-resolved configs remain unresolved. Unknown option arity
 leaves file operands unresolved, but a known emitting config is still rejected.
 Unknown branches pass; admission is not a guarantee that a command contains no
-hidden build or test. Reclassification happens on every invocation, so
-editing a registered script changes the next decision.
+hidden build or test. `node-verify` runs through `node` with no compile step,
+so it is admissible at check, but ytif reads only its exports: a `verifyXxx`
+body can still spawn build or test work that static admission cannot see, and
+keeping such work out of check stays the host's responsibility. Reclassification
+happens on every invocation, so editing a registered script changes the next
+decision. Invalid check placement fails before anything runs and is also
+surfaced by `list` and CI reconciliation, so an affected omission cannot hide it.
 
-Completed commands record timing and outcomes under the separate `check`
-lane: `ytif stats --gate check`. `--records PATH` uses another record file.
-Interrupted or unstarted commands have no completed result. A pass does
-not replace any gate check. Exit codes are `0` when every command passes,
-`1` for execution failures or interruption, and `2` for invalid registration,
-rejected commands, or a recording failure.
+Completed check runs record timing and outcomes under the `check` gate:
+`ytif stats --gate check`. `--records PATH` uses another record file.
+Interrupted or unstarted entries have no completed result. A pass does
+not replace any other gate. Like the other gates, check also fails on shared
+ledger or gate-configuration findings, including findings on entries it does
+not execute. Exit codes are `0` when execution and reconciliation pass,
+`1` for execution or reconciliation failures or interruption, and `2` for
+invalid registration, rejected entries, or a recording failure.
 
-## The inventory
+## The ledger
 
-`ytif-inventory.yaml` holds one contract per discovered check:
+`ytif-verifications.yaml` (version 3) holds the verification list. The root file
+carries the shared `version`, `vocabulary`, and `prepare` configuration; every
+file, root or included, may carry `verifications` and `includes`. Includes
+resolve relative to the file that declares them and must stay inside that
+file's directory subtree: no absolute paths, no parent escapes, and no symlink
+escapes. Missing, non-file, malformed, cyclic, or duplicate-key references fail
+before anything runs, with file and entry provenance. Splitting never creates
+gate, scheduler, Nx, or identity boundaries; merging keeps ledger order.
 
 ```yaml
-version: 2
+version: 3
 vocabulary:                    # the project's own tag groups
   where:
     release: Release
     install: { en: Install, ko: 설치 }
-checks:
+includes:
+  - teams/billing/verifications.yaml
+verifications:
   - runner: go-verify
     unit: internal/release
     name: VerifyChangelog
-    placement: commit          # commit, push, or ci
+    commit: true               # check/commit opt-ins; push+CI are the default
     tags: [user, mistake, misdirection, release, silent, manual]
-    requires:                  # optional: checks this one depends on
+    requires:                  # optional: verifications this one depends on
       - { runner: go-test, unit: internal/release, name: TestVersionBump }
     accident: A release bumps the version without a changelog entry.
     detection: Reads the version and the changelog, and fails when the version has no entry.
     impact: The release ships notes that do not describe it.
     delete_when: Release notes are generated from commits.
+  - runner: command
+    name: formatting
+    run: [pnpm, exec, prettier, --list-different, .]
+    check: true
 ```
 
-`accident` is an ordinary, unintended change the check catches,
-`detection` what the check runs and observes so that the accident fails
-it, `impact` what users see when that change ships, and `delete_when` an
-observable condition for removing the check; all four are required. You
-choose the placement: an earlier gate for a check worth its cost there, as
-`ytif stats` shows.
+Every verification belongs to CI and, unless `skip-push: true`, to push.
+`check: true` and `commit: true` independently add those gates; all three
+booleans default to `false` and `skip-push` carries no reason. The host owns
+`skip-push` choices; ytif never assigns them. `unit` and relative `cwd` stay
+repository-root relative.
 
-Tags describe the accident. ytif ships these groups; every check carries
+`accident` is an ordinary, unintended change the verification catches,
+`detection` what the verification runs and observes so that the accident fails
+it, `impact` what users see when that change ships, and `delete_when` an
+observable condition for removing the verification; all four are required for
+discovered entries. Self-registered `command` entries carry no contract and
+are exempt from contract reconciliation. Choose `check`/`commit` for work worth
+its cost there, as `ytif stats` shows.
+
+Tags describe the accident. ytif ships these groups; every verification carries
 exactly one `visibility` and one `recovery` tag, and any number of the rest:
 
 | Group | Tags |
@@ -236,35 +279,76 @@ exactly one `visibility` and one `recovery` tag, and any number of the rest:
 
 `vocabulary` declares further groups; a label is one text or one per
 language (`en`, `ko`), and a tag name may appear in one group only.
-`requires` and `ensures` name other inventoried checks this one depends on
+`requires` and `ensures` name other inventoried verifications this one depends on
 or keeps working. An unknown tag, a missing `visibility` or `recovery` tag,
-and a relation to a check outside the inventory are findings.
+and a relation to a verification outside the ledger are findings.
+
+`ytif migrate` converts `ytif-inventory.yaml` (version 2) to
+`ytif-verifications.yaml` (version 3) with the new binary, without delegating
+to an older pinned ytif. It maps `checks` to `verifications`,
+`placement: commit` to `commit: true`, `push`/`ci` placements to the new push+CI
+default, and `commands` to `runner: command` entries with `check: true`, keeping
+`name`, `run`, `cwd`, and `exclusive`. It never assigns `skip-push`; the notice
+names the resulting push and CI expansion so the host can add explicit
+exclusions. Keys are preserved, collisions fail, and reruns are stable.
+Exemptions stay at version 2 with unchanged meaning.
 
 ## Gates
 
-| Command | Runs checks placed at | Files given to checks |
+| Command | Runs | Files given to verifications |
 |---|---|---|
-| `ytif commit` | commit | staged files |
-| `ytif push` | commit, push | files changed by the pushed refs |
-| `ytif ci` | commit, push, ci | every tracked file |
+| `ytif check` | `check: true` | tracked paths, working-tree content |
+| `ytif commit` | `commit: true` | staged paths listed, working-tree content read |
+| `ytif push` | every verification unless `skip-push: true` | tracked tree at the checkout |
+| `ytif ci` | every verification | tracked tree at the checkout |
 
-Placement selects the checks; the files are input for verify checks, not a
-filter on tests. In an Nx workspace, `ytif ci --base REF` also leaves out the
-test checks of projects that the changes since REF do not affect; verify
-checks and tests outside every project still run. Something must still run
-`ytif ci` without `--base`, such as the push to the main branch.
+Membership selects the verifications; the files are input for verify
+verifications, not a filter on tests. `push` and CI at equivalent revisions use
+the same tracked-tree execution scope, so file-consuming verifications cost
+more at push than a pushed-files scope would. Supported verifications also
+receive the mode, base, and head context, plus `YTIF_MODE`, `YTIF_BASE`, and
+`YTIF_HEAD` in the environment, so self-narrowing wrappers can use them.
+This context describes ytif's selection; it does not prove which work a
+wrapper or its child commands actually executed.
 
-The runners of a gate run at once, and `--jobs N` (default: the CPU count)
-bounds how many processes ytif runs together while discovering and running
-checks: test processes, builds, listings, and dispatchers. Preparation and
-`--base` narrowing run alone, before and after discovery; `go env`,
-`go mod edit`, and git run outside the bound. Parallelism inside a process,
-such as a test framework's workers, stays the project's configuration.
-Checks that may run together must not share ports, build outputs, or
-temporary paths. Output a check passes through is printed a line at a time,
-prefixed with `[runner]`; results print in runner order once every runner
-has finished. One CI job running `ytif ci` does the work of a job per
-runner without repeating the checkout and setup.
+`--base REF` opts any gate into affected mode; without it the gate runs full.
+The host chooses when to run full, including on the final CI. Nx owns the
+dependency and affected analysis and ytif applies it to every verification
+kind through the existing path-to-deepest-project mapping. A verification with
+unknown scope and an unmapped verification still run; unavailable affected
+support falls back to the eligible set with a brief notice, an invalid
+`--base` is an input error, and a valid empty
+affected set stays empty. There is no mandatory per-verification Nx binding and
+no global rerun merely because the ledger changed.
+
+Local `check` and `commit` judge the working tree: the merge base of `--base`
+with HEAD through the current tree, including staged, unstaged, deleted, old
+rename paths, and untracked files. A typical local call is
+`ytif check --base HEAD`. `push` and PR CI judge the same host-supplied PR
+comparison: the merge base of `--base` with each pushed tip or with the
+checkout HEAD. The host supplies the same PR base to `push` and CI and never
+guesses it from the push destination. Multi-ref pushes union their change sets;
+CI records the checkout HEAD and, for a synthetic merge, its second parent.
+When the working tree differs from a pushed tip, the run records a revision
+mismatch and prints one notice; it does not fail by default and ytif never
+requires a clean tree.
+
+The runners of a gate run at once, and `--jobs N` (default: 2 for `check`,
+the CPU count otherwise) bounds how many processes ytif runs together while
+discovering and running verifications: test processes, builds, listings, and
+dispatchers. Affected selection happens before preparation and discovery;
+only runners with selected verifications are prepared and discovered.
+Affected runs therefore do not certify a complete census of new tests:
+`list` and full CI reconcile every runner, including a CI run that falls back
+to full. The host chooses when those full reconciliations run.
+Preparation runs sequentially before discovery; `go env`, `go mod edit`, and
+git run outside the process bound. Parallelism
+inside a process, such as a test framework's workers, stays the project's
+configuration. Verifications that may run together must not share ports, build
+outputs, or temporary paths. Output a verification passes through is printed a
+line at a time, prefixed with `[runner]`; results print in runner order once
+every runner has finished. One CI job running `ytif ci` does the work of a job
+per runner without repeating the checkout and setup.
 
 ```yaml
 # lefthook.yml
@@ -328,18 +412,24 @@ An exemption matches the text of the step, not what that text runs: a
 script, package script, or Nx target that changes behind an unchanged step
 keeps its exemption, so review such changes as you would the step.
 
-`ytif list` shows checks and findings; `ytif stats` shows recorded time and
+`ytif list` shows verifications and findings; `ytif stats` shows recorded time and
 hits, where a hit is a run of consecutive fails that a pass ends.
 `ytif ci --report github` emits annotations.
 
 ## Board
 
-`ytif board` writes the inventory and its records as one static HTML file,
+`ytif board` writes the ledger and its records as one static HTML file,
 `<git-common-dir>/ytif/board.html`, and opens it; `--out PATH` only writes
 it, and `--records PATH` reads other record files, such as a CI artifact.
-Its pages list and filter checks by tag, draw a check's relations and
-nearest checks, show each check's cost and hits, and lay out the
-vocabulary, in English or Korean. Exit codes: `0` pass,
+Its pages list and filter verifications by tag and by all four gate memberships,
+draw a verification's relations and nearest verifications, show each
+verification's cost and hits from history rather than present-day membership,
+show run selection context with requested and effective mode, fallback, revision
+mismatch, and omissions, and lay out the vocabulary, in English or Korean.
+An omission is neither a pass nor a zero-duration run; an empty ledger reads
+differently from an affected selection that chose nothing, and records before
+selection tracking show mode unknown. The board fetches no remote artifacts and
+compares no retrospective full and affected runs. Exit codes: `0` pass,
 `1` fail, `2` usage or configuration error.
 
 To work on the page itself, run from this repository's root:
@@ -354,7 +444,7 @@ at `http://127.0.0.1:8765`, rebuilding the page from
 
 ## Agent guard
 
-Agents run registered pre-gate commands through `ytif check`; other checks
+Agents run `check: true` verifications through `ytif check`; other verifications
 are left to the Git hooks and CI that start the gates.
 `ytif guard` is a PreToolUse hook that refuses agent commands that run
 checks. It refuses nothing until an agent's configuration runs it, which

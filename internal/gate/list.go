@@ -24,7 +24,13 @@ func List(ctx context.Context, root string, sources []check.Source, config Confi
 
 	if !summary {
 		for _, e := range s.Result.Managed {
-			fmt.Fprintf(w, "%-8s %-7s %s\n", "managed", e.Placement, e.Key())
+			var gates []string
+			for _, g := range []string{check.GateCheck, check.GateCommit, check.GatePush, check.GateCI} {
+				if e.Member(g) {
+					gates = append(gates, g)
+				}
+			}
+			fmt.Fprintf(w, "%-8s %-22s %s\n", "managed", strings.Join(gates, ","), e.Key())
 		}
 		for _, f := range findings {
 			fmt.Fprintln(w, f)

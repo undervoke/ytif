@@ -22,6 +22,12 @@ const grace = 10 * time.Second
 var ErrInterrupted = errors.New("interrupted")
 
 type limitKey struct{}
+type environmentKey struct{}
+
+// WithEnvironment carries a gate's execution context into all source processes.
+func WithEnvironment(ctx context.Context, env []string) context.Context {
+	return context.WithValue(ctx, environmentKey{}, append([]string(nil), env...))
+}
 
 // WithLimit returns a context under which at most n processes started by
 // Run run at once.
@@ -46,6 +52,9 @@ func Run(ctx context.Context, cmd *exec.Cmd) (time.Duration, error) {
 	start := time.Now()
 	isolate(cmd)
 	cmd.Env = withoutRepositoryEnv(cmd.Environ())
+	if env, ok := ctx.Value(environmentKey{}).([]string); ok {
+		cmd.Env = append(cmd.Env, env...)
+	}
 	var cancelled atomic.Bool
 	if cancel := cmd.Cancel; cancel != nil {
 		cmd.Cancel = func() error {

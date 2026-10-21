@@ -44,23 +44,18 @@ func ParseKey(s string) (Key, error) {
 
 // Gate names.
 const (
+	GateCheck  = "check"
 	GateCommit = "commit"
 	GatePush   = "push"
 	GateCI     = "ci"
 )
 
-// Rank orders placements cumulatively: a gate runs every check placed at its
-// rank or earlier. It returns 0 for names that are not placements.
-func Rank(name string) int {
+func ValidGate(name string) bool {
 	switch name {
-	case GateCommit:
-		return 1
-	case GatePush:
-		return 2
-	case GateCI:
-		return 3
+	case GateCheck, GateCommit, GatePush, GateCI:
+		return true
 	}
-	return 0
+	return false
 }
 
 // Outcome is the result of one executed check.
@@ -87,6 +82,15 @@ type Input struct {
 	Gate  string
 	Scope string
 	Files []string // slash-separated, relative to the repository root
+	Mode  string
+	Base  string
+	Head  string
+}
+
+// Environment supplies the selection context without claiming that child
+// commands use it to select their own work.
+func (in Input) Environment() []string {
+	return []string{"YTIF_MODE=" + in.Mode, "YTIF_BASE=" + in.Base, "YTIF_HEAD=" + in.Head}
 }
 
 // Result is one check outcome.
@@ -132,10 +136,8 @@ type Repo struct {
 	Log     io.Writer // progress and passthrough output
 }
 
-// CoRunner is implemented by sources in which running one check
-// necessarily runs others, such as a Go check's providers or tests a name
-// pattern cannot separate. Reconciliation requires those to be placed at
-// the same gate or earlier.
+// CoRunner is implemented by sources in which running one verification
+// necessarily runs others. Required partners must belong to the same gate.
 type CoRunner interface {
 	// CoRuns maps a discovered key to the other keys that run with it.
 	CoRuns() map[Key][]Key

@@ -15,6 +15,7 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/undervoke/ytif/internal/check"
@@ -40,10 +41,20 @@ func (g *Graph) Unaffected(unit string) bool {
 	return best >= 0 && !g.affected[owner]
 }
 
-// Nx reads the Nx project graph and the projects affected between base and
-// HEAD. It returns a nil graph and a reason when the repository has no Nx
-// workspace.
-func Nx(ctx context.Context, repo check.Repo, base string) (*Graph, string, []check.Invocation, error) {
+// NxFiles reports which projects the changed files affect. It loads the Nx
+// project graph once, then asks Nx for the affected projects for exactly
+// those files. changed holds slash-separated paths relative to the
+// repository root. An empty list returns the graph with nothing marked
+// affected, without invoking the affected query. Verification units outside
+// the graph's projects remain selected. Unrepresentable names and Nx failures return an
+// error so the caller falls back to the eligible set.
+//
+// Contract: --files is one comma-joined argv; Nx splits items on commas
+// only and strips one pair of surrounding double quotes, so commas and
+// quote-wrapped names fall back while other names pass through verbatim.
+// Deleted paths are valid affected input. Overlong lists fall back through
+// the invocation error, with no length pre-check here.
+func NxFiles(ctx context.Context, repo check.Repo, changed []string) (*Graph, string, []check.Invocation, error) {
 	if !slices.Contains(repo.Tracked, "nx.json") {
 		return nil, "no nx.json at the repository root", nil, nil
 	}
@@ -61,8 +72,7 @@ func Nx(ctx context.Context, repo check.Repo, base string) (*Graph, string, []ch
 		if err != nil {
 			err = fmt.Errorf("nx %s: %w\n%s", label, err, strings.TrimSpace(stderr.String()))
 		}
-		// The gate reports a failure here itself, so the invocation
-		// records only its cost.
+		// The gate reports the fallback, so this invocation records only cost.
 		invs = append(invs, check.Invocation{Runner: "nx", Unit: label, What: "affected",
 			Elapsed: elapsed, Interrupted: errors.Is(err, proc.ErrInterrupted)})
 		return stdout.Bytes(), err
@@ -94,8 +104,27 @@ func Nx(ctx context.Context, repo check.Repo, base string) (*Graph, string, []ch
 		}
 		g.roots[name] = root
 	}
-
-	out, err := nx("show projects", "show", "projects", "--affected", "--base="+base, "--head=HEAD", "--json")
+	if len(changed) == 0 {
+		return g, "", invs, nil
+	}
+	seen := map[string]bool{}
+	var files []string
+	for _, f := range changed {
+		if f == "" || seen[f] {
+			continue
+		}
+		seen[f] = true
+		if strings.Contains(f, ",") || (strings.HasPrefix(f, `"`) && strings.HasSuffix(f, `"`)) {
+			return nil, "", invs, fmt.Errorf("nx --files: path %q cannot be represented unambiguously", f)
+		}
+		files = append(files, f)
+	}
+	if len(files) == 0 {
+		return g, "", invs, nil
+	}
+	sort.Strings(files)
+	joined := strings.Join(files, ",")
+	out, err := nx("show projects", "show", "projects", "--affected", "--files="+joined, "--json")
 	if err != nil {
 		return nil, "", invs, err
 	}

@@ -104,20 +104,34 @@ func heldBack(selected []check.Key, co map[check.Key][]check.Key) ([]check.Key, 
 	for _, k := range selected {
 		in[k] = true
 	}
-	var keep []check.Key
 	var held []dispatchError
-	for _, k := range selected {
-		var early []string
-		for _, o := range co[k] {
-			if !in[o] {
-				early = append(early, o.String())
+	for {
+		changed := false
+		for _, k := range selected {
+			if !in[k] {
+				continue
+			}
+			var outside []string
+			for _, partner := range co[k] {
+				if !in[partner] {
+					outside = append(outside, partner.String())
+				}
+			}
+			if len(outside) > 0 {
+				delete(in, k)
+				changed = true
+				held = append(held, dispatchError{k, fmt.Sprintf("not run: required co-run partners are outside this gate's executable selection: %s", strings.Join(outside, ", "))})
 			}
 		}
-		if len(early) > 0 {
-			held = append(held, dispatchError{k, fmt.Sprintf("not run: running it would also run %s, which this gate does not select", strings.Join(early, ", "))})
-			continue
+		if !changed {
+			break
 		}
-		keep = append(keep, k)
+	}
+	var keep []check.Key
+	for _, k := range selected {
+		if in[k] {
+			keep = append(keep, k)
+		}
 	}
 	return keep, held
 }

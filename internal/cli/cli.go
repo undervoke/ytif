@@ -15,11 +15,11 @@ import (
 	"github.com/undervoke/ytif/internal/allow"
 	"github.com/undervoke/ytif/internal/board"
 	"github.com/undervoke/ytif/internal/check"
-	"github.com/undervoke/ytif/internal/checkrun"
 	"github.com/undervoke/ytif/internal/gate"
 	"github.com/undervoke/ytif/internal/gitx"
 	"github.com/undervoke/ytif/internal/guard"
 	"github.com/undervoke/ytif/internal/initcmd"
+	"github.com/undervoke/ytif/internal/inventory"
 	"github.com/undervoke/ytif/internal/launch"
 	"github.com/undervoke/ytif/internal/record"
 )
@@ -27,29 +27,30 @@ import (
 const usageText = `usage: ytif <command> [flags]
 
 gates:
-  commit                 run checks placed at commit against staged files
-  push                   run checks placed at commit and push against pushed changes
-  ci                     run every placed check against the whole tree
+  check                  run verifications enabled at check
+  commit                 run verifications enabled at commit
+  push                   run verifications except skip-push
+  ci                     run all verifications
 
 other:
-  check                  run every project-registered pre-gate command
-  init [--hosts LIST]     pin this ytif, wire the gates, and register selected agent hosts
-  list                   show managed checks and reconciliation findings
-  stats                  show recent elapsed time and hits per check
-  board [--out PATH]     write the inventory board as one HTML file and open it
-  guard [--host cursor]   agent hook: refuse agent check runs
-  allow [DURATION|--off] let agents run checks themselves for DURATION
+  migrate                convert the legacy inventory to ytif-verifications.yaml
+  init [--hosts LIST]     pin this ytif, wire gates, and register selected agent hosts
+  list                   show verifications and reconciliation findings
+  stats                  show recent elapsed time and hits per verification
+  board [--out PATH]     write the verification board as one HTML file and open it
+  guard [--host cursor]   agent hook: refuse direct verification runs
+  allow [DURATION|--off] let agents run verifications themselves for DURATION
   update                 replace the ytif on PATH with the latest release
   version                print the version
 
-Inside a Go module that pins ytif as a tool, every command but update runs
-the pinned version.
+Inside a Go module that pins ytif, commands other than update, init and migrate
+run the pinned version.
 
 gate flags:
   --report github        emit GitHub Actions annotations
   --records PATH         append records to PATH instead of the git common dir
-  --base REF             ci only: narrow test checks to Nx projects affected since REF
-  --jobs N               run at most N processes at once (default: CPU count)
+  --base REF             select Nx-affected verifications; absent means full
+  --jobs N               bound concurrent processes (check: 2; other gates: CPU count)
 `
 
 // Run executes one command and returns its exit code.
@@ -63,10 +64,22 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, version strin
 
 	cmd, rest := args[0], args[1:]
 	switch cmd {
-	case check.GateCommit, check.GatePush, check.GateCI:
+	case check.GateCheck, check.GateCommit, check.GatePush, check.GateCI:
 		return runGate(ctx, cmd, rest, stdin, stdout, stderr)
-	case "check":
-		return runCheck(ctx, rest, stdout, stderr)
+	case "migrate":
+		if len(rest) != 0 {
+			fmt.Fprintln(stderr, "ytif migrate: takes no arguments")
+			return gate.ExitUsage
+		}
+		root, code := repoRoot(stderr)
+		if code != 0 {
+			return code
+		}
+		if err := inventory.Migrate(root, stdout); err != nil {
+			fmt.Fprintf(stderr, "ytif migrate: %v\n", err)
+			return gate.ExitUsage
+		}
+		return gate.ExitPass
 	case "init":
 		return runInit(rest, stdin, stdout, stderr, version)
 	case "list":
@@ -96,31 +109,14 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, version strin
 	return gate.ExitUsage
 }
 
-func runCheck(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("check", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	jobs := fs.Int("jobs", 2, "run at most N registered commands at once")
-	records := fs.String("records", "", "append execution records to PATH")
-	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
-		return usageError(stderr, fs, "takes no arguments; runs the whole registered list")
-	}
-	if *jobs < 1 {
-		return usageError(stderr, fs, "--jobs must be at least 1")
-	}
-	root, code := repoRoot(stderr)
-	if code != 0 {
-		return code
-	}
-	return checkrun.Run(ctx, root, checkrun.Options{Jobs: *jobs, Records: *records, Stdout: stdout, Stderr: stderr})
-}
-
 func runGate(ctx context.Context, name string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs, report, records := gateFlags(name, stderr)
-	jobs := fs.Int("jobs", gate.DefaultJobs, "run at most N processes at once")
-	var base *string
-	if name == check.GateCI {
-		base = fs.String("base", "", "narrow test checks to projects changed since REF")
+	defaultJobs := gate.DefaultJobs
+	if name == check.GateCheck {
+		defaultJobs = 2
 	}
+	jobs := fs.Int("jobs", defaultJobs, "run at most N processes at once")
+	base := fs.String("base", "", "select Nx-affected verifications since REF")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return usageError(stderr, fs, "takes no arguments")
 	}
@@ -188,7 +184,7 @@ func runStats(args []string, stdout, stderr io.Writer) int {
 	}
 	checks, invs, guards := record.Stats(lines, record.Filter{Gate: *gateName, Context: *ctxName}, *last)
 	avgHead := fmt.Sprintf("AVG(last %d)", *last)
-	fmt.Fprintf(stdout, "%-6s %-6s %-12s %-7s %-7s %s\n", "RUNS", "HITS", avgHead, "GATE", "CONTEXT", "CHECK")
+	fmt.Fprintf(stdout, "%-6s %-6s %-12s %-7s %-7s %s\n", "RUNS", "HITS", avgHead, "GATE", "CONTEXT", "VERIFICATION")
 	for _, c := range checks {
 		fmt.Fprintf(stdout, "%-6d %-6d %-12s %-7s %-7s %s\n", c.Runs, c.Hits, avg(c.AvgMS), c.Gate, c.Context, c.Key)
 	}

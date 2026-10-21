@@ -44,7 +44,13 @@ for (const [i, c] of req.Checks.entries()) {
     const fn = (await modules.get(c.Module))[c.Name];
     if (controller.signal.aborted) throw new Error("interrupted before the check started");
     if (typeof fn !== "function") throw new Error(`${c.Name} is not an exported function`);
-    await fn({ files: [...(req.Files ?? [])], signal: controller.signal }, out);
+    await fn({
+      files: [...(req.Files ?? [])],
+      signal: controller.signal,
+      mode: req.Mode,
+      base: req.Base,
+      head: req.Head,
+    }, out);
   } catch (err) {
     outcome = "fail";
     if (text !== "" && !text.endsWith("\n")) text += "\n";

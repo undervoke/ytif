@@ -33,10 +33,10 @@ const (
 // Delegate runs args through `go tool ytif` when the working directory's
 // module pins a ytif version other than self, and returns that run's exit
 // code. It reports false without running anything when this ytif should run
-// args itself: for update and init, which change what is installed or
-// pinned, for a development build, and outside a module that pins ytif.
+// args itself: for update, init and migrate, which adopt the new executable
+// or its format, for a development build, and outside a module that pins ytif.
 func Delegate(args []string, stdin io.Reader, stdout, stderr io.Writer, self string) (int, bool) {
-	if self == "dev" || os.Getenv(delegatedEnv) != "" || len(args) > 0 && (args[0] == "update" || args[0] == "init") {
+	if self == "dev" || os.Getenv(delegatedEnv) != "" || len(args) > 0 && (args[0] == "update" || args[0] == "init" || args[0] == "migrate") {
 		return 0, false
 	}
 	pin, ok := Pinned("")

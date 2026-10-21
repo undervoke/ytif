@@ -13,6 +13,7 @@ import (
 	"github.com/undervoke/ytif/internal/affected"
 	"github.com/undervoke/ytif/internal/check"
 	"github.com/undervoke/ytif/internal/gitx"
+	"github.com/undervoke/ytif/internal/inventory"
 	"github.com/undervoke/ytif/internal/proc"
 	"github.com/undervoke/ytif/internal/reconcile"
 	"github.com/undervoke/ytif/internal/record"
@@ -27,8 +28,8 @@ const (
 
 // Options configures one gate run.
 type Options struct {
-	Gate    string    // commit, push, or ci
-	Base    string    // ci only: narrow test checks to projects changed since this ref
+	Gate    string    // check, commit, push, or ci
+	Base    string    // affected comparison base; empty selects full
 	Jobs    int       // processes run at once; 0 means DefaultJobs
 	Report  string    // "" or "github"
 	Records string    // "" means <git-common-dir>/ytif/records.jsonl
@@ -51,26 +52,24 @@ type dispatchError struct {
 
 // Run executes one gate and returns its exit code.
 func Run(ctx context.Context, root string, o Options) int {
-	if check.Rank(o.Gate) == 0 {
+	if !check.ValidGate(o.Gate) {
 		fmt.Fprintf(o.Stderr, "ytif: unknown gate %q\n", o.Gate)
 		return ExitUsage
-	}
-	// A base that does not resolve is a usage error, found before any
-	// preparation or discovery starts.
-	var base string
-	if o.Base != "" {
-		var err error
-		if base, err = gitx.MergeBase(root, o.Base); err != nil {
-			fmt.Fprintf(o.Stderr, "ytif: --base %s: %v\n", o.Base, err)
-			return ExitUsage
-		}
 	}
 	jobs := o.Jobs
 	if jobs == 0 {
 		jobs = DefaultJobs
+		if o.Gate == check.GateCheck {
+			jobs = 2
+		}
 	}
 	ctx = proc.WithLimit(ctx, jobs)
-	s, err := NewSurvey(ctx, root, o.Sources, o.Config, o.Stderr)
+	snapshot, err := gitx.SelectionSnapshot(root, o.Gate, o.Base, o.Stdin)
+	if err != nil {
+		fmt.Fprintf(o.Stderr, "ytif: %v\n", err)
+		return ExitUsage
+	}
+	s, err := loadSurvey(ctx, root, o.Sources, o.Config, o.Stderr, jobs)
 	if err != nil {
 		fmt.Fprintf(o.Stderr, "ytif: %v\n", err)
 		return ExitUsage
@@ -82,37 +81,136 @@ func Run(ctx context.Context, root string, o Options) int {
 		fmt.Fprintf(o.Stderr, "ytif: %v\n", err)
 		return ExitUsage
 	}
-	selected := selectKeys(s, o)
-	narrowed := ""
-	if base != "" {
-		var dropped int
-		selected, dropped = narrow(ctx, s, base, selected, o.Stderr)
-		narrowed = fmt.Sprintf(" · %d unaffected since %.12s", dropped, base)
+	mode := "full"
+	if o.Base != "" {
+		mode = "affected"
 	}
-
-	fmt.Fprintf(o.Stdout, "ytif %s · %d selected%s · %s %d files · jobs %d\n", o.Gate, len(selected), narrowed, in.Scope, len(in.Files), jobs)
+	selection := record.Selection{
+		RequestedMode:    mode,
+		EffectiveMode:    mode,
+		Base:             snapshot.Base,
+		Head:             snapshot.Head,
+		Bases:            snapshot.Bases,
+		Tips:             snapshot.Tips,
+		MergeParents:     snapshot.MergeParents,
+		DirtyDigest:      snapshot.DirtyDigest,
+		RevisionMismatch: snapshot.RevisionMismatch,
+		Registered:       len(s.Inventory.Verifications),
+		Eligible:         []string{},
+		Selected:         []string{},
+	}
+	eligible := map[check.Key]bool{}
+	var selected []check.Key
+	for _, e := range s.Inventory.Verifications {
+		if e.Member(o.Gate) {
+			eligible[e.Key()] = true
+			selection.Eligible = append(selection.Eligible, e.Key().String())
+			selected = append(selected, e.Key())
+		}
+	}
+	if snapshot.RevisionMismatch {
+		fmt.Fprintf(o.Stderr, "ytif: results reflect the working tree at %s, not necessarily pushed tips %s\n", snapshot.Head, strings.Join(snapshot.Tips, ", "))
+	}
+	if len(s.Admission) == 0 && mode == "affected" {
+		g, reason, invs, nxErr := affected.NxFiles(ctx, s.Repo, snapshot.Changed)
+		s.Listing = append(s.Listing, invs...)
+		if nxErr != nil {
+			reason = nxErr.Error()
+		}
+		if g == nil {
+			selection.EffectiveMode, selection.Fallback = "full", reason
+			fmt.Fprintf(o.Stderr, "ytif: affected unavailable; running gate members: %s\n", reason)
+		} else {
+			kept := make([]check.Key, 0, len(selected))
+			for _, k := range selected {
+				if k.Runner == inventory.CommandRunner || !g.Unaffected(k.Unit) {
+					kept = append(kept, k)
+				}
+			}
+			selected = kept
+		}
+	}
+	in.Mode, in.Base, in.Head = selection.EffectiveMode, snapshot.Base, snapshot.Head
+	ctx = proc.WithEnvironment(ctx, in.Environment())
+	if len(s.Admission) == 0 {
+		for _, k := range selected {
+			s.Active[k.Runner] = true
+		}
+		if o.Gate == check.GateCI && selection.EffectiveMode == "full" {
+			for r := range s.Owner {
+				s.Active[r] = true
+			}
+		}
+		s.explore(ctx, in)
+		selected = closeCoRuns(selected, eligible, coRuns(s))
+	} else {
+		s.reconcile()
+	}
+	wanted := map[check.Key]bool{}
+	for _, k := range selected {
+		wanted[k] = true
+		selection.Selected = append(selection.Selected, k.String())
+	}
+	for _, e := range s.Inventory.Verifications {
+		if wanted[e.Key()] {
+			continue
+		}
+		reason := "unaffected"
+		if !eligible[e.Key()] {
+			reason = "not-in-gate"
+			if o.Gate == check.GatePush && e.SkipPush {
+				reason = "skip-push"
+			}
+		}
+		selection.Omissions = append(selection.Omissions, record.Omission{Key: e.Key().String(), Reason: reason})
+	}
+	fmt.Fprintf(o.Stdout, "ytif %s · %s · %d selected / %d eligible · %s %d files · jobs %d\n", o.Gate, selection.EffectiveMode, len(selected), len(eligible), in.Scope, len(in.Files), jobs)
 
 	cancelledAt := make(chan time.Time, 1)
 	stop := context.AfterFunc(ctx, func() { cancelledAt <- time.Now() })
 	defer stop()
-	run := collect(ctx, s, selected, in)
+	var run outcome
+	if len(s.Admission) == 0 {
+		managed := map[check.Key]bool{}
+		for _, e := range s.Result.Managed {
+			managed[e.Key()] = true
+		}
+		var runnable []check.Key
+		for _, k := range selected {
+			if managed[k] {
+				runnable = append(runnable, k)
+			}
+		}
+		run = collect(ctx, s, runnable, in)
+	}
 	findings := s.Findings()
 	exit := present(o, run, findings)
+	if len(s.Admission) > 0 {
+		exit = ExitUsage
+	}
 	var cutoff time.Time
 	if ctx.Err() != nil {
 		cutoff = <-cancelledAt
-		fmt.Fprintf(o.Stdout, "ytif %s: interrupted; outcomes the interruption cut short are not recorded\n", o.Gate)
+		fmt.Fprintf(o.Stdout, "ytif %s: interrupted; unfinished outcomes are not recorded\n", o.Gate)
 		exit = ExitFail
 	}
-
+	selection.Completed = ctx.Err() == nil && len(s.Admission) == 0
 	ctxName := o.Context
 	if ctxName == "" {
 		ctxName = detectContext()
 	}
-	listing := check.Report{Invocations: s.Listing}
-	run.reports = append([]check.Report{listing}, run.reports...)
-	if err := writeRecords(root, o.Records, recordLines(o.Gate, ctxName, in.Scope, run, findings, cutoff)); err != nil {
-		// A run whose cost and outcomes are not recorded did not complete.
+	run.reports = append([]check.Report{{Invocations: s.Listing}}, run.reports...)
+	lines := recordLines(o.Gate, ctxName, in.Scope, run, findings, cutoff)
+	attempt, now := record.NewAttempt(), time.Now().UTC()
+	if len(lines) > 0 {
+		attempt, now = lines[0].Attempt, lines[0].Time
+	}
+	status := "pass"
+	if exit != ExitPass {
+		status = "fail"
+	}
+	lines = append(lines, record.Line{Time: now, Attempt: attempt, Kind: record.KindSelection, Gate: o.Gate, Context: ctxName, Scope: in.Scope, Outcome: status, Selection: &selection})
+	if err := writeRecords(root, o.Records, lines); err != nil {
 		fmt.Fprintf(o.Stderr, "ytif: records not written: %v\n", err)
 		return ExitUsage
 	}
@@ -120,62 +218,34 @@ func Run(ctx context.Context, root string, o Options) int {
 }
 
 func bindInput(root string, o Options, tracked []string) (check.Input, error) {
-	in := check.Input{Gate: o.Gate}
+	in := check.Input{Gate: o.Gate, Scope: check.ScopeTree, Files: tracked}
 	var err error
-	switch o.Gate {
-	case check.GateCommit:
+	if o.Gate == check.GateCommit {
 		in.Scope = check.ScopeStaged
 		in.Files, err = gitx.Staged(root)
-	case check.GatePush:
-		in.Scope = check.ScopePushed
-		in.Files, err = gitx.Pushed(root, o.Stdin)
-	case check.GateCI:
-		in.Scope, in.Files = check.ScopeTree, tracked
 	}
 	if in.Files == nil {
-		in.Files = []string{} // an empty scope stays empty; it never widens to the tree
+		in.Files = []string{}
 	}
 	return in, err
 }
 
-// selectKeys applies cumulative placement.
-func selectKeys(s *Survey, o Options) []check.Key {
-	rank := check.Rank(o.Gate)
-	var keys []check.Key
-	for _, e := range s.Result.Managed {
-		if check.Rank(e.Placement) <= rank {
-			keys = append(keys, e.Key())
-		}
-	}
-	return keys
-}
-
-// testRunners are the runners whose unit holds a check's inputs. A verify
-// check's unit is only where it is written, so it is never narrowed.
-var testRunners = map[string]bool{
-	"go-test": true, "bun-test": true, "node-test": true,
-	"dotnet-test": true, "vitest-test": true, "playwright-test": true,
-}
-
-// narrow drops test checks whose unit belongs to a project the changes since
-// base do not affect. Without a graph it drops nothing and says why.
-func narrow(ctx context.Context, s *Survey, base string, keys []check.Key, log io.Writer) ([]check.Key, int) {
-	g, reason, invs, err := affected.Nx(ctx, s.Repo, base)
-	s.Listing = append(s.Listing, invs...)
-	if err != nil {
-		reason = err.Error()
-	}
-	if g == nil {
-		fmt.Fprintf(log, "ytif: nothing narrowed: %s\n", reason)
-		return keys, 0
-	}
-	var kept []check.Key
+// closeCoRuns restores unaffected partners only within the gate's membership.
+func closeCoRuns(keys []check.Key, eligible map[check.Key]bool, co map[check.Key][]check.Key) []check.Key {
+	seen := map[check.Key]bool{}
 	for _, k := range keys {
-		if !testRunners[k.Runner] || !g.Unaffected(k.Unit) {
-			kept = append(kept, k)
+		seen[k] = true
+	}
+	out := append([]check.Key(nil), keys...)
+	for i := 0; i < len(out); i++ {
+		for _, partner := range co[out[i]] {
+			if eligible[partner] && !seen[partner] {
+				seen[partner] = true
+				out = append(out, partner)
+			}
 		}
 	}
-	return kept, len(keys) - len(kept)
+	return out
 }
 
 func ownedBy(s *Survey, src check.Source, keys []check.Key) []check.Key {

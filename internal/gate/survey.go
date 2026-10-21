@@ -1,5 +1,4 @@
-// Package gate runs gates: discovery, reconciliation, cumulative selection,
-// dispatch, reporting, and records.
+// Package gate runs verification gates through selection, discovery, dispatch and records.
 package gate
 
 import (
@@ -13,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/undervoke/ytif/internal/check"
+	"github.com/undervoke/ytif/internal/checkrun"
 	"github.com/undervoke/ytif/internal/gitx"
 	"github.com/undervoke/ytif/internal/inventory"
 	"github.com/undervoke/ytif/internal/proc"
@@ -36,15 +36,30 @@ type Survey struct {
 	Listing    []check.Invocation      // processes preparation, discovery, and narrowing started
 	Result     reconcile.Result
 	Config     []reconcile.Finding // nil when gate configuration was not checked
-
-	logMu sync.Mutex // serializes the sources' writes to Repo.Log
+	Admission  []reconcile.Finding
+	Active     map[string]bool
+	logMu      sync.Mutex
 }
 
-// NewSurvey discovers every source's checks and reconciles them with the
-// inventory and, when config is set, the gate configuration. An error means
-// the inventory or the exemptions cannot be read. Close removes the scratch
-// directory.
+// NewSurvey performs full discovery for list. Gate runs select active runners first.
 func NewSurvey(ctx context.Context, root string, sources []check.Source, config ConfigChecker, log io.Writer) (*Survey, error) {
+	s, err := loadSurvey(ctx, root, sources, config, log, DefaultJobs)
+	if err != nil {
+		return nil, err
+	}
+	if len(s.Admission) == 0 {
+		for r := range s.Owner {
+			s.Active[r] = true
+		}
+		in := check.Input{Mode: "full"}
+		s.explore(proc.WithEnvironment(ctx, in.Environment()), in)
+	} else {
+		s.reconcile()
+	}
+	return s, nil
+}
+
+func loadSurvey(ctx context.Context, root string, sources []check.Source, config ConfigChecker, log io.Writer, jobs int) (*Survey, error) {
 	tracked, err := gitx.Tracked(root)
 	if err != nil {
 		return nil, err
@@ -61,6 +76,7 @@ func NewSurvey(ctx context.Context, root string, sources []check.Source, config 
 	if err != nil {
 		return nil, err
 	}
+	sources = append(append([]check.Source(nil), sources...), checkrun.NewSource(inv.Verifications, jobs))
 	s := &Survey{
 		Repo:       check.Repo{Root: root, Tracked: tracked, Scratch: scratch, Log: log},
 		Inventory:  inv,
@@ -69,6 +85,7 @@ func NewSurvey(ctx context.Context, root string, sources []check.Source, config 
 		Owner:      map[string]check.Source{},
 		Keys:       map[string][]check.Key{},
 		Failed:     map[string]error{},
+		Active:     map[string]bool{},
 	}
 	for _, src := range sources {
 		for _, r := range src.Runners() {
@@ -78,40 +95,53 @@ func NewSurvey(ctx context.Context, root string, sources []check.Source, config 
 			s.Owner[r] = src
 		}
 	}
-	if err := s.prepare(ctx); err != nil {
-		s.Close()
-		return nil, err
+	for _, issue := range checkrun.CheckAdmission(root, inv.Verifications, inv.Prepare) {
+		s.Admission = append(s.Admission, reconcile.Finding{Kind: reconcile.InvalidPlacement, Key: issue.Key, Location: issue.Location, Detail: issue.Detail})
 	}
-	s.discover(ctx)
-	known := map[string]bool{}
-	for r := range s.Owner {
-		known[r] = true
+	for i, p := range inv.Prepare {
+		for _, r := range p.Runners {
+			if s.Owner[r] == nil {
+				s.Admission = append(s.Admission, reconcile.Finding{Kind: reconcile.UnknownRunner, Location: fmt.Sprintf("%s: prepare[%d]", inventory.InventoryFile, i), Detail: "unknown runner " + r})
+			}
+		}
 	}
-	s.Result = reconcile.Reconcile(inv, known, s.Keys, s.Failed)
-	s.Result.Findings = append(s.Result.Findings, s.placementOrder()...)
-	reconcile.Sort(s.Result.Findings)
 	if config != nil {
 		s.Config = config.Check(ctx, s.Repo, exemptions)
-		reconcile.Sort(s.Config)
 	}
 	return s, nil
 }
 
-// prepare runs the inventory's preparation commands in order, before any
-// discovery. A failed command fails discovery of its runners, so the gate
-// fails as it does for any incomplete discovery.
-func (s *Survey) prepare(ctx context.Context) error {
-	for i, p := range s.Inventory.Prepare {
-		for _, r := range p.Runners {
-			if s.Owner[r] == nil {
-				return fmt.Errorf("%s: prepare[%d]: unknown runner %q", inventory.InventoryFile, i, r)
-			}
-		}
+func (s *Survey) explore(ctx context.Context, in check.Input) {
+	s.prepare(ctx, in)
+	s.discover(ctx)
+	s.reconcile()
+}
+
+func (s *Survey) reconcile() {
+	known := map[string]bool{}
+	for r := range s.Owner {
+		known[r] = true
 	}
+	s.Result = reconcile.Reconcile(s.Inventory, known, s.Keys, s.Failed)
+	s.Result.Findings = append(s.Result.Findings, s.Admission...)
+	s.Result.Findings = append(s.Result.Findings, s.placementOrder()...)
+	reconcile.Sort(s.Result.Findings)
+}
+
+// prepare runs only steps needed by a runner selected for discovery.
+func (s *Survey) prepare(ctx context.Context, in check.Input) {
 	for _, p := range s.Inventory.Prepare {
+		needed := false
+		for _, r := range p.Runners {
+			needed = needed || s.Active[r]
+		}
+		if !needed {
+			continue
+		}
 		command := strings.Join(p.Run, " ")
 		cmd := exec.CommandContext(ctx, p.Run[0], p.Run[1:]...)
 		cmd.Dir = s.Repo.Root
+		cmd.Env = append(cmd.Environ(), in.Environment()...)
 		cmd.Stdout, cmd.Stderr = s.Repo.Log, s.Repo.Log
 		elapsed, err := proc.Run(ctx, cmd)
 		s.Listing = append(s.Listing, check.Invocation{
@@ -120,15 +150,15 @@ func (s *Survey) prepare(ctx context.Context) error {
 		})
 		if err != nil {
 			for _, r := range p.Runners {
-				s.Failed[r] = fmt.Errorf("prepare %s: %w", command, err)
+				if s.Active[r] {
+					s.Failed[r] = fmt.Errorf("prepare %s: %w", command, err)
+				}
 			}
 		}
 	}
-	return nil
 }
 
-// discover runs every source's discovery concurrently. A source whose
-// runners all failed preparation is not discovered.
+// discover runs active sources concurrently. A failed preparation is not retried.
 func (s *Survey) discover(ctx context.Context) {
 	type found struct {
 		keys []check.Key
@@ -136,15 +166,18 @@ func (s *Survey) discover(ctx context.Context) {
 		err  error
 	}
 	out := make([]found, len(s.Sources))
+	started := make([]bool, len(s.Sources))
 	var wg sync.WaitGroup
 	for i, src := range s.Sources {
-		unprepared := true
+		active, prepared := false, false
 		for _, r := range src.Runners() {
-			unprepared = unprepared && s.Failed[r] != nil
+			active = active || s.Active[r]
+			prepared = prepared || (s.Active[r] && s.Failed[r] == nil)
 		}
-		if unprepared {
+		if !active || !prepared {
 			continue
 		}
+		started[i] = true
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -156,7 +189,13 @@ func (s *Survey) discover(ctx context.Context) {
 	}
 	wg.Wait()
 	for i, src := range s.Sources {
+		if !started[i] {
+			continue
+		}
 		f := out[i]
+		for _, r := range src.Runners() {
+			s.Keys[r] = []check.Key{}
+		}
 		s.Listing = append(s.Listing, f.invs...)
 		for _, k := range f.keys {
 			if s.Owner[k.Runner] != src {
@@ -182,28 +221,26 @@ func (s *Survey) repoFor(src check.Source) (check.Repo, func()) {
 	return repo, t.flush
 }
 
-// placementOrder reports managed checks that necessarily run a managed
-// check placed at a later gate, which would run it outside its placement.
+// placementOrder reports a co-run relation that cannot honor gate membership.
 func (s *Survey) placementOrder() []reconcile.Finding {
-	placement := map[check.Key]string{}
-	for _, e := range s.Result.Managed {
-		placement[e.Key()] = e.Placement
+	entries := map[check.Key]inventory.Entry{}
+	for _, e := range s.Inventory.Verifications {
+		entries[e.Key()] = e
 	}
 	var findings []reconcile.Finding
-	for _, src := range s.Sources {
-		co, ok := src.(check.CoRunner)
+	for k, others := range coRuns(s) {
+		e, ok := entries[k]
 		if !ok {
 			continue
 		}
-		for k, others := range co.CoRuns() {
-			p, ok := placement[k]
+		for _, other := range others {
+			o, ok := entries[other]
 			if !ok {
 				continue
 			}
-			for _, o := range others {
-				if q, ok := placement[o]; ok && check.Rank(q) > check.Rank(p) {
-					findings = append(findings, reconcile.Finding{Kind: reconcile.PlacementOrder, Key: k,
-						Detail: fmt.Sprintf("placed at %s, but running it also runs %s, placed at %s; place that at %s or earlier", p, o, q, p)})
+			for _, g := range []string{check.GateCheck, check.GateCommit, check.GatePush, check.GateCI} {
+				if e.Member(g) && !o.Member(g) {
+					findings = append(findings, reconcile.Finding{Kind: reconcile.PlacementOrder, Key: k, Detail: fmt.Sprintf("enabled at %s, but requires %s, which is not", g, other)})
 				}
 			}
 		}

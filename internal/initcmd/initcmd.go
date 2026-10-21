@@ -414,7 +414,11 @@ func plan(root string, hosts []string) ([]file, []error) {
 		}
 		files = append(files, f)
 	}
-	add(skeleton(root, inventory.InventoryFile, "version: 2\nchecks: []\n"))
+	if _, err := inventory.LoadInventory(root); err != nil {
+		errs = append(errs, err)
+	} else {
+		add(skeleton(root, inventory.InventoryFile, "version: 3\nverifications: []\n"))
+	}
 	add(lefthook(root, wired))
 	var actions []string
 	if !wired.CI {

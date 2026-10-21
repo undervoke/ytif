@@ -19,6 +19,7 @@ import (
 
 // Line kinds.
 const (
+	KindSelection  = "selection"  // gate membership and execution selection
 	KindResult     = "result"     // one check outcome
 	KindInvocation = "invocation" // one build or process with its wall time
 	KindReconcile  = "reconcile"  // one reconciliation finding
@@ -28,19 +29,44 @@ const (
 
 // Line is one record.
 type Line struct {
-	Time      time.Time `json:"time"`
-	Attempt   string    `json:"attempt"`
-	Kind      string    `json:"kind"`
-	Gate      string    `json:"gate,omitempty"`
-	Context   string    `json:"context,omitempty"`
-	Scope     string    `json:"scope,omitempty"`
-	Key       string    `json:"key,omitempty"`
-	Runner    string    `json:"runner,omitempty"`
-	Unit      string    `json:"unit,omitempty"`
-	What      string    `json:"what,omitempty"`
-	Outcome   string    `json:"outcome,omitempty"`
-	ElapsedMS *int64    `json:"elapsed_ms,omitempty"` // nil when unknown
-	Detail    string    `json:"detail,omitempty"`
+	Time      time.Time  `json:"time"`
+	Attempt   string     `json:"attempt"`
+	Kind      string     `json:"kind"`
+	Gate      string     `json:"gate,omitempty"`
+	Context   string     `json:"context,omitempty"`
+	Scope     string     `json:"scope,omitempty"`
+	Key       string     `json:"key,omitempty"`
+	Runner    string     `json:"runner,omitempty"`
+	Unit      string     `json:"unit,omitempty"`
+	What      string     `json:"what,omitempty"`
+	Outcome   string     `json:"outcome,omitempty"`
+	ElapsedMS *int64     `json:"elapsed_ms,omitempty"` // nil when unknown
+	Detail    string     `json:"detail,omitempty"`
+	Selection *Selection `json:"selection,omitempty"`
+}
+
+// Selection describes scheduling, not a claim about work spawned by a verifier.
+type Selection struct {
+	RequestedMode    string     `json:"requested_mode"`
+	EffectiveMode    string     `json:"effective_mode"`
+	Base             string     `json:"base,omitempty"`
+	Head             string     `json:"head,omitempty"`
+	Fallback         string     `json:"fallback,omitempty"`
+	DirtyDigest      string     `json:"dirty_digest,omitempty"`
+	Bases            []string   `json:"bases,omitempty"`
+	Tips             []string   `json:"tips,omitempty"`
+	MergeParents     []string   `json:"merge_parents,omitempty"`
+	RevisionMismatch bool       `json:"revision_mismatch,omitempty"`
+	Registered       int        `json:"registered"`
+	Eligible         []string   `json:"eligible"`
+	Selected         []string   `json:"selected"`
+	Omissions        []Omission `json:"omissions,omitempty"`
+	Completed        bool       `json:"completed"`
+}
+
+type Omission struct {
+	Key    string `json:"key"`
+	Reason string `json:"reason"`
 }
 
 // Millis converts d for ElapsedMS.

@@ -2,7 +2,6 @@
 package reconcile
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 
@@ -15,18 +14,18 @@ import (
 type Kind string
 
 const (
-	Unregistered     Kind = "unregistered"      // discovered, absent from the inventory
-	Stale            Kind = "stale"             // in the inventory, absent from a complete discovery
-	MissingContract  Kind = "missing-contract"  // inventoried without required assessments
-	UnknownTag       Kind = "unknown-tag"       // a tag no vocabulary declares
-	TagCount         Kind = "tag-count"         // an exactly-one group tagged zero or several times
-	DanglingRelation Kind = "dangling-relation" // requires or ensures names a check the inventory lacks
-	Duplicate        Kind = "duplicate"         // one key listed or discovered twice
-	InvalidPlacement Kind = "invalid-placement" // placement is not commit, push, or ci
-	PlacementOrder   Kind = "placement-order"   // a check runs another that is placed later
-	UnknownRunner    Kind = "unknown-runner"    // inventory names a runner no source owns
-	DiscoveryFailed  Kind = "discovery-failed"  // a runner's discovery is incomplete
-	GateConfig       Kind = "gate-config"       // a gate entry bypasses the rail or is unclassified
+	Unregistered     Kind = "unregistered"        // discovered, absent from the inventory
+	Stale            Kind = "stale"               // in the inventory, absent from a complete discovery
+	MissingContract  Kind = "missing-contract"    // inventoried without required assessments
+	UnknownTag       Kind = "unknown-tag"         // a tag no vocabulary declares
+	TagCount         Kind = "tag-count"           // an exactly-one group tagged zero or several times
+	DanglingRelation Kind = "dangling-relation"   // requires or ensures names a check the inventory lacks
+	Duplicate        Kind = "duplicate"           // one key listed or discovered twice
+	InvalidPlacement Kind = "invalid-placement"   // an entry cannot run at an enabled gate
+	PlacementOrder   Kind = "membership-conflict" // a required co-run partner is outside a gate
+	UnknownRunner    Kind = "unknown-runner"      // inventory names a runner no source owns
+	DiscoveryFailed  Kind = "discovery-failed"    // a runner's discovery is incomplete
+	GateConfig       Kind = "gate-config"         // a gate entry bypasses the rail or is unclassified
 )
 
 // Finding is one reconciliation failure.
@@ -48,6 +47,9 @@ func (f Finding) String() string {
 		b.WriteString(" " + f.Runner)
 	case f.Location != "":
 		b.WriteString(" " + f.Location)
+	}
+	if f.Key != (check.Key{}) && f.Location != "" {
+		b.WriteString(" (" + f.Location + ")")
 	}
 	if f.Detail != "" {
 		b.WriteString(": " + f.Detail)
@@ -86,19 +88,19 @@ func Reconcile(inv inventory.Inventory, known map[string]bool, discovered map[st
 	}
 
 	inventoried := map[check.Key]bool{}
-	for _, e := range inv.Checks {
+	for _, e := range inv.Verifications {
 		inventoried[e.Key()] = true
 	}
 	groups := inv.TagGroups()
-	for _, e := range inv.Checks {
+	for _, e := range inv.Verifications {
 		res.Findings = append(res.Findings, entryFindings(e, groups, inventoried)...)
 	}
 
 	listed := map[check.Key]bool{}
-	for _, e := range inv.Checks {
+	for _, e := range inv.Verifications {
 		k := e.Key()
 		if listed[k] {
-			res.Findings = append(res.Findings, Finding{Kind: Duplicate, Key: k, Detail: "listed twice in the inventory"})
+			res.Findings = append(res.Findings, Finding{Kind: Duplicate, Key: k, Detail: "listed twice in verifications"})
 			continue
 		}
 		listed[k] = true
@@ -109,16 +111,11 @@ func Reconcile(inv inventory.Inventory, known map[string]bool, discovered map[st
 		if missing := e.MissingContract(); len(missing) > 0 {
 			res.Findings = append(res.Findings, Finding{Kind: MissingContract, Key: k, Detail: "empty " + strings.Join(missing, ", ")})
 		}
-		valid := check.Rank(e.Placement) > 0
-		if !valid {
-			res.Findings = append(res.Findings, Finding{Kind: InvalidPlacement, Key: k, Detail: fmt.Sprintf("%q is not commit, push, or ci", e.Placement)})
-		}
+		_, discoveredRunner := discovered[e.Runner]
 		switch {
-		case found[k]:
-			if valid {
-				res.Managed = append(res.Managed, e)
-			}
-		case failed[e.Runner] == nil:
+		case found[k] || e.Runner == "command":
+			res.Managed = append(res.Managed, e)
+		case discoveredRunner && failed[e.Runner] == nil:
 			res.Findings = append(res.Findings, Finding{Kind: Stale, Key: k})
 		}
 	}
@@ -139,6 +136,9 @@ func entryFindings(e inventory.Entry, groups map[string]inventory.Group, invento
 	var fs []Finding
 	k := e.Key()
 	unknown, counts := e.TagProblems(groups)
+	if e.Runner == "command" && len(e.Tags) == 0 {
+		counts = nil // legacy commands never required contract classification tags
+	}
 	if len(unknown) > 0 {
 		fs = append(fs, Finding{Kind: UnknownTag, Key: k, Detail: strings.Join(unknown, ", ")})
 	}

@@ -211,7 +211,10 @@ func (*Source) Run(ctx context.Context, repo check.Repo, keys []check.Key, in ch
 	req := struct {
 		Files  []string
 		Checks []call
-	}{Files: in.Files}
+		Mode   string
+		Base   string
+		Head   string
+	}{Files: in.Files, Mode: in.Mode, Base: in.Base, Head: in.Head}
 	names := make([]string, len(keys))
 	for i, k := range keys {
 		names[i] = k.Unit + ":" + k.Name

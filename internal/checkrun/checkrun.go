@@ -1,14 +1,18 @@
-// Package checkrun executes the project's entire pre-gate command list, without
-// test discovery or preparation. Exclusive tokens are owner-declared mutexes,
-// not dependency edges or a promise about undeclared shared resources.
+// Package checkrun runs the project's registered direct commands as the
+// command runner, and judges which registrations check may admit.
+//
+// A command entry carries its own argv, so the source is self-registering:
+// discovery returns the registered keys without starting any process.
+// CheckAdmission validates every check:true registration before execution
+// and never launches a process; the existing static recognizers read
+// project files but start nothing. An agent allowance never bypasses
+// admission: it takes no allow state, and its findings surface regardless.
 package checkrun
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -16,113 +20,207 @@ import (
 	"time"
 
 	"github.com/undervoke/ytif/internal/check"
-	"github.com/undervoke/ytif/internal/gitx"
 	"github.com/undervoke/ytif/internal/inventory"
 	"github.com/undervoke/ytif/internal/proc"
-	"github.com/undervoke/ytif/internal/record"
 )
 
-type Options struct {
-	Jobs    int
-	Records string
-	Stdout  io.Writer
-	Stderr  io.Writer
+// Runner is the runner name this source owns: the inventory's direct
+// command runner.
+const Runner = inventory.CommandRunner
+
+// testKinds are the runners whose work is test work by kind. A check:true
+// registration on one of them is invalid without reading any command.
+var testKinds = map[string]bool{
+	"go-test": true, "bun-test": true, "node-test": true,
+	"dotnet-test": true, "vitest-test": true, "playwright-test": true,
 }
 
+// Source runs the registered direct commands a gate selects. Commands run
+// with the gate's worker count and atomic exclusive tokens, and their
+// outcomes aggregate the way the old whole-list lane reported them: one
+// result and one run invocation per command, keyed command:unit:name.
+type Source struct {
+	entries []command
+	jobs    int
+}
+
+// command is one registered direct command.
+type command struct {
+	key  check.Key
+	name string
+	run  []string
+	// cwd is the registered directory; workingDir resolves it against the
+	// repository root at run time.
+	cwd       string
+	exclusive []string
+}
+
+// NewSource keeps the command entries in registration order and ignores
+// every other runner. jobs caps how many commands run at once; below 1 it
+// means 1. The caller passes 2 for check and the CPU count for the gates.
+func NewSource(entries []inventory.Entry, jobs int) *Source {
+	if jobs < 1 {
+		jobs = 1
+	}
+	s := &Source{jobs: jobs}
+	for _, e := range entries {
+		if e.Runner != Runner {
+			continue
+		}
+		s.entries = append(s.entries, command{
+			key: e.Key(), name: e.Name, run: e.Run, cwd: e.Cwd, exclusive: e.Exclusive,
+		})
+	}
+	return s
+}
+
+// Runners lists the runner names this source owns.
+func (*Source) Runners() []string { return []string{Runner} }
+
+// Discover returns the self-registered command keys. It starts no process.
+func (s *Source) Discover(context.Context, check.Repo) ([]check.Key, []check.Invocation, error) {
+	keys := make([]check.Key, 0, len(s.entries))
+	for _, e := range s.entries {
+		keys = append(keys, e.key)
+	}
+	return keys, nil, nil
+}
+
+// outcome is what one selected command did.
 type outcome struct {
-	index       int
-	elapsed     time.Duration
-	err         error
-	started     bool
+	elapsed time.Duration
+	ended   time.Time // when the command finished, if it ran
+	err     error
+	// interrupted means cancellation stopped the command or kept it from
+	// starting; it leaves an interrupted invocation and no result, so the
+	// gate records nothing for it.
 	interrupted bool
 }
 
-// Run validates the whole list before launching any command. It aggregates
-// ordinary failures; interruption stops scheduling and cancels running groups.
-func Run(ctx context.Context, root string, o Options) int {
-	if o.Jobs < 1 {
-		o.Jobs = 1
-	}
-	inv, err := inventory.LoadInventory(root)
-	if err != nil {
-		fmt.Fprintf(o.Stderr, "ytif check: %v\n", err)
-		return 2
-	}
-	entries := inv.Commands
-	names := map[string]bool{}
-	inspector := newInspector(root)
-	for n, e := range entries {
-		if strings.TrimSpace(e.Name) == "" || len(e.Run) == 0 || e.Run[0] == "" {
-			fmt.Fprintf(o.Stderr, "ytif check: commands[%d] needs name and run argv\n", n)
-			return 2
-		}
-		if names[e.Name] {
-			fmt.Fprintf(o.Stderr, "ytif check: duplicate name %q would combine separate results\n", e.Name)
-			return 2
-		}
-		names[e.Name] = true
-		inspector.visits = 0
-		if why := inspector.script(commandText(e.Run), workingDir(root, e.Cwd)); why != "" {
-			fmt.Fprintf(o.Stderr, "ytif check: %s runs %s; builds and tests belong at the gates, and check cannot invoke ytif gates, itself, or the user allowance\n", e.Name, why)
-			return 2
-		}
-	}
-	if o.Records == "" {
-		common, err := gitx.CommonDir(root)
-		if err != nil {
-			fmt.Fprintf(o.Stderr, "ytif check: %v\n", err)
-			return 2
-		}
-		o.Records = record.DefaultPath(common)
-	}
-	fmt.Fprintf(o.Stdout, "ytif check · %d commands · jobs %d\n", len(entries), o.Jobs)
-	results := execute(ctx, root, entries, o)
-	lines := make([]record.Line, 0, len(entries)*2)
-	attempt, now := record.NewAttempt(), time.Now().UTC()
-	contextName := "local"
-	if ci := strings.ToLower(os.Getenv("CI")); ci != "" && ci != "0" && ci != "false" {
-		contextName = "ci"
-	}
-	exit := 0
-	for n, r := range results {
-		e := entries[n]
-		if !r.started || r.interrupted {
-			fmt.Fprintf(o.Stdout, "interrupted %s\n", e.Name)
-			exit = 1
-			continue
-		}
-		status := "pass"
-		detail := ""
-		if r.err != nil {
-			status, detail, exit = "fail", r.err.Error(), 1
-		}
-		fmt.Fprintf(o.Stdout, "%s %s · %s", status, e.Name, r.elapsed.Round(time.Millisecond))
-		if detail != "" {
-			fmt.Fprintf(o.Stdout, " · %s", detail)
-		}
-		fmt.Fprintln(o.Stdout)
-		unit := e.Cwd
-		if unit == "" {
-			unit = "."
-		}
-		line := record.Line{Time: now, Attempt: attempt, Gate: "check", Context: contextName,
-			Scope: "command", Runner: "command", Unit: unit, Kind: record.KindResult,
-			Key:     (check.Key{Runner: "command", Unit: unit, Name: e.Name}).String(),
-			Outcome: status, ElapsedMS: record.Millis(r.elapsed), Detail: detail}
-		lines = append(lines, line)
-		line.Kind, line.Key, line.Unit, line.What = record.KindInvocation, "", e.Name, "run"
-		lines = append(lines, line)
-	}
-	if ctx.Err() != nil {
-		exit = 1
-	}
-	if err := record.Append(o.Records, lines); err != nil {
-		fmt.Fprintf(o.Stderr, "ytif check: records not written: %v\n", err)
-		return 2
-	}
-	return exit
+// picked is one selected key and the command registered for it, if any.
+type picked struct {
+	key check.Key
+	cmd *command // nil when this source registers no such key
 }
 
+// Run executes the selected command keys in the requested order against in.
+// Every selected key gets either a result or an invocation explaining why
+// it has none. It writes no records itself: the gate owns the run's
+// records.
+func (s *Source) Run(ctx context.Context, repo check.Repo, keys []check.Key, in check.Input) (check.Report, error) {
+	byKey := make(map[check.Key]*command, len(s.entries))
+	for i := range s.entries {
+		byKey[s.entries[i].key] = &s.entries[i]
+	}
+	sel := make([]picked, 0, len(keys))
+	for _, k := range keys {
+		sel = append(sel, picked{key: k, cmd: byKey[k]})
+	}
+	outs := s.execute(ctx, repo, sel, in)
+	var rep check.Report
+	for i, o := range outs {
+		name := sel[i].key.Name
+		if sel[i].cmd != nil {
+			name = sel[i].cmd.name
+		}
+		rep.Invocations = append(rep.Invocations, check.Invocation{
+			Runner: Runner, Unit: name, What: "run",
+			Elapsed: o.elapsed, Err: o.err, Keys: []check.Key{sel[i].key}, Interrupted: o.interrupted,
+		})
+		if o.interrupted || sel[i].cmd == nil {
+			// The invocation error above explains the missing outcome.
+			continue
+		}
+		result := check.Pass
+		if o.err != nil {
+			result = check.Fail
+		}
+		rep.Results = append(rep.Results, check.Result{
+			Key: sel[i].key, Outcome: result, Elapsed: o.elapsed, Timed: true, Ended: o.ended,
+		})
+	}
+	return rep, nil
+}
+
+// execute runs the registered selections with the source's worker count.
+// Exclusive tokens are owner-declared mutexes, not dependency edges:
+// workers never hold a partial token set while waiting for another token.
+// Selections the source does not register, or that carry no runnable argv,
+// get an explanatory error without starting anything.
+func (s *Source) execute(ctx context.Context, repo check.Repo, sel []picked, in check.Input) []outcome {
+	outs := make([]outcome, len(sel))
+	pending := make([]int, 0, len(sel))
+	for i, q := range sel {
+		switch {
+		case q.cmd == nil:
+			outs[i] = outcome{err: fmt.Errorf("command %s is not registered", q.key)}
+		case len(q.cmd.run) == 0 || q.cmd.run[0] == "":
+			outs[i] = outcome{err: fmt.Errorf("command %s needs run argv", q.cmd.name)}
+		default:
+			pending = append(pending, i)
+		}
+	}
+	type done struct {
+		index int
+		out   outcome
+	}
+	finished := make(chan done, len(pending))
+	busy := map[string]bool{}
+	running := 0
+	var logMu sync.Mutex
+	for len(pending) > 0 || running > 0 {
+		if ctx.Err() != nil {
+			for _, i := range pending {
+				outs[i] = outcome{interrupted: true}
+			}
+			pending = nil
+		}
+		for p := 0; p < len(pending) && running < s.jobs && ctx.Err() == nil; {
+			i := pending[p]
+			c := sel[i].cmd
+			locked := false
+			for _, token := range c.exclusive {
+				locked = locked || busy[token]
+			}
+			if locked {
+				p++
+				continue
+			}
+			for _, token := range c.exclusive {
+				busy[token] = true
+			}
+			pending = append(pending[:p], pending[p+1:]...)
+			running++
+			go func() {
+				log := &lineWriter{mu: &logMu, dst: repo.Log, prefix: "[" + c.name + "] "}
+				cmd := exec.CommandContext(ctx, c.run[0], c.run[1:]...)
+				cmd.Dir = workingDir(repo.Root, c.cwd)
+				cmd.Stdout, cmd.Stderr = log, log
+				cmd.Env = append(cmd.Environ(), in.Environment()...)
+				elapsed, err := proc.Run(ctx, cmd)
+				log.flush()
+				finished <- done{index: i, out: outcome{
+					elapsed: elapsed, ended: time.Now().UTC(),
+					err:         err,
+					interrupted: errors.Is(err, proc.ErrInterrupted),
+				}}
+			}()
+		}
+		if running == 0 {
+			break
+		}
+		r := <-finished
+		outs[r.index] = r.out
+		running--
+		for _, token := range sel[r.index].cmd.exclusive {
+			delete(busy, token)
+		}
+	}
+	return outs
+}
+
+// workingDir resolves a registered command directory against the
+// repository root. An absolute directory is used as is.
 func workingDir(root, dir string) string {
 	if filepath.IsAbs(dir) {
 		return filepath.Clean(dir)
@@ -130,57 +228,78 @@ func workingDir(root, dir string) string {
 	return filepath.Join(root, dir)
 }
 
-// execute acquires every token in the scheduler before starting a command.
-// Workers never hold a partial token set while waiting for another token.
-func execute(ctx context.Context, root string, entries []inventory.Command, o Options) []outcome {
-	results := make([]outcome, len(entries))
-	pending := make([]int, len(entries))
-	for i := range pending {
-		pending[i] = i
-	}
-	done := make(chan outcome, len(entries))
-	busy := map[string]bool{}
-	running := 0
-	var logMu sync.Mutex
-	for len(pending) > 0 || running > 0 {
-		if ctx.Err() != nil {
-			pending = nil
+// AdmissionIssue is one reason a registration cannot run at check, or one
+// malformed command entry whatever gate might run it.
+type AdmissionIssue struct {
+	Key check.Key // zero when the issue is on a prepare step, not an entry
+	// Location names the registration: verifications[i] or prepare[i].
+	Location string
+	Detail   string
+}
+
+// CheckAdmission validates every check:true entry before execution, plus
+// the shape of every command entry whatever gate might run it. Test kinds
+// and go-verify are rejected by kind; command argv and the prepare steps of
+// check-enabled runners go through the existing static inspector, which
+// reads project files but never launches a process. node-verify bodies are
+// not analyzed: its dispatcher runs tracked files directly with no compile
+// step, so hidden build or test work a function body spawns stays the
+// host's responsibility. Duplicate command keys are the inventory loader's
+// finding, not this one's.
+func CheckAdmission(root string, entries []inventory.Entry, prepare []inventory.Prep) []AdmissionIssue {
+	var out []AdmissionIssue
+	atCheck := map[string]bool{}
+	inspector := newInspector(root)
+	for i, e := range entries {
+		loc := e.Origin
+		if loc == "" {
+			loc = fmt.Sprintf("verifications[%d]", i)
 		}
-		for p := 0; p < len(pending) && running < o.Jobs && ctx.Err() == nil; {
-			i := pending[p]
-			e := entries[i]
-			locked := false
-			for _, token := range e.Exclusive {
-				locked = locked || busy[token]
-			}
-			if locked {
-				p++
+		if e.Runner == Runner {
+			if strings.TrimSpace(e.Name) == "" || len(e.Run) == 0 || e.Run[0] == "" {
+				out = append(out, AdmissionIssue{Key: e.Key(), Location: loc, Detail: "command entry needs a name and run argv"})
 				continue
 			}
-			for _, token := range e.Exclusive {
-				busy[token] = true
+		}
+		if !e.Check {
+			continue
+		}
+		atCheck[e.Runner] = true
+		switch {
+		case testKinds[e.Runner]:
+			out = append(out, AdmissionIssue{Key: e.Key(), Location: loc,
+				Detail: fmt.Sprintf("%q is test work by kind and cannot run at check", e.Runner)})
+		case e.Runner == "go-verify":
+			out = append(out, AdmissionIssue{Key: e.Key(), Location: loc,
+				Detail: "go-verify compiles its dispatcher before running; that build work cannot run at check"})
+		case e.Runner == Runner:
+			inspector.visits = 0
+			if why := inspector.script(commandText(e.Run), workingDir(root, e.Cwd)); why != "" {
+				out = append(out, AdmissionIssue{Key: e.Key(), Location: loc,
+					Detail: fmt.Sprintf("runs %s; check excludes builds, tests, gate recursion and the user allowance", why)})
 			}
-			pending = append(pending[:p], pending[p+1:]...)
-			running++
-			go func() {
-				log := &lineWriter{mu: &logMu, dst: o.Stdout, prefix: "[" + e.Name + "] "}
-				cmd := exec.CommandContext(ctx, e.Run[0], e.Run[1:]...)
-				cmd.Dir = workingDir(root, e.Cwd)
-				cmd.Stdout, cmd.Stderr = log, log
-				elapsed, err := proc.Run(ctx, cmd)
-				log.flush()
-				done <- outcome{index: i, started: true, elapsed: elapsed, err: err, interrupted: errors.Is(err, proc.ErrInterrupted)}
-			}()
-		}
-		if running == 0 {
-			break
-		}
-		r := <-done
-		results[r.index] = r
-		running--
-		for _, token := range entries[r.index].Exclusive {
-			delete(busy, token)
+		case e.Runner == "node-verify":
+			// Admitted without body analysis; see the doc comment above.
+		default:
+			// Bounded recognition: admission reports what the static
+			// inspector recognizes and claims nothing about other kinds.
 		}
 	}
-	return results
+	for i, p := range prepare {
+		var runners []string
+		for _, r := range p.Runners {
+			if atCheck[r] {
+				runners = append(runners, r)
+			}
+		}
+		if len(runners) == 0 {
+			continue
+		}
+		inspector.visits = 0
+		if why := inspector.script(commandText(p.Run), root); why != "" {
+			out = append(out, AdmissionIssue{Location: fmt.Sprintf("prepare[%d]", i),
+				Detail: fmt.Sprintf("runs %s for check-enabled runners (%s); check excludes builds, tests, gate recursion and the user allowance", why, strings.Join(runners, ", "))})
+		}
+	}
+	return out
 }
