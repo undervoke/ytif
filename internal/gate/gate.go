@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"runtime"
 	"sort"
 	"strings"
@@ -32,8 +31,8 @@ type Options struct {
 	Base    string    // affected comparison base; empty selects full
 	Jobs    int       // processes run at once; 0 means DefaultJobs
 	Report  string    // "" or "github"
+	Record  bool      // append records for this trigger
 	Records string    // "" means <git-common-dir>/ytif/records.jsonl
-	Context string    // "" detects ci or local
 	Stdin   io.Reader // push only: pre-push ref lines
 	Stdout  io.Writer
 	Stderr  io.Writer
@@ -195,12 +194,11 @@ func Run(ctx context.Context, root string, o Options) int {
 		exit = ExitFail
 	}
 	selection.Completed = ctx.Err() == nil && len(s.Admission) == 0
-	ctxName := o.Context
-	if ctxName == "" {
-		ctxName = detectContext()
+	if !o.Record {
+		return exit
 	}
 	run.reports = append([]check.Report{{Invocations: s.Listing}}, run.reports...)
-	lines := recordLines(o.Gate, ctxName, in.Scope, run, findings, cutoff)
+	lines := recordLines(o.Gate, in.Scope, run, findings, cutoff)
 	attempt, now := record.NewAttempt(), time.Now().UTC()
 	if len(lines) > 0 {
 		attempt, now = lines[0].Attempt, lines[0].Time
@@ -209,7 +207,7 @@ func Run(ctx context.Context, root string, o Options) int {
 	if exit != ExitPass {
 		status = "fail"
 	}
-	lines = append(lines, record.Line{Time: now, Attempt: attempt, Kind: record.KindSelection, Gate: o.Gate, Context: ctxName, Scope: in.Scope, Outcome: status, Selection: &selection})
+	lines = append(lines, record.Line{Time: now, Attempt: attempt, Kind: record.KindSelection, Gate: o.Gate, Scope: in.Scope, Outcome: status, Selection: &selection})
 	if err := writeRecords(root, o.Records, lines); err != nil {
 		fmt.Fprintf(o.Stderr, "ytif: records not written: %v\n", err)
 		return ExitUsage
@@ -259,21 +257,13 @@ func ownedBy(s *Survey, src check.Source, keys []check.Key) []check.Key {
 	return out
 }
 
-func detectContext() string {
-	switch strings.ToLower(os.Getenv("CI")) {
-	case "", "0", "false":
-		return "local"
-	}
-	return "ci"
-}
-
 // recordLines turns one run into records. After an interruption at cutoff,
 // a process the interruption stopped leaves no records of its own, and its
 // checks only those outcomes known to have come before the interruption.
-func recordLines(gate, ctxName, scope string, run outcome, findings []reconcile.Finding, cutoff time.Time) []record.Line {
+func recordLines(gate, scope string, run outcome, findings []reconcile.Finding, cutoff time.Time) []record.Line {
 	now := time.Now().UTC()
 	attempt := record.NewAttempt()
-	base := record.Line{Time: now, Attempt: attempt, Gate: gate, Context: ctxName, Scope: scope}
+	base := record.Line{Time: now, Attempt: attempt, Gate: gate, Scope: scope}
 	stopped := map[check.Key]bool{}
 	for _, rep := range run.reports {
 		for _, inv := range rep.Invocations {

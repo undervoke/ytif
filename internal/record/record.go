@@ -33,7 +33,6 @@ type Line struct {
 	Attempt   string     `json:"attempt"`
 	Kind      string     `json:"kind"`
 	Gate      string     `json:"gate,omitempty"`
-	Context   string     `json:"context,omitempty"`
 	Scope     string     `json:"scope,omitempty"`
 	Key       string     `json:"key,omitempty"`
 	Runner    string     `json:"runner,omitempty"`

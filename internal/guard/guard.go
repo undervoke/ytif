@@ -281,7 +281,7 @@ func recordRefusal(commonDir, runner, command string) error {
 		command = command[:500] + "…"
 	}
 	return record.Append(record.DefaultPath(commonDir), []record.Line{{
-		Time: time.Now().UTC(), Attempt: record.NewAttempt(), Kind: record.KindGuard, Context: "agent",
+		Time: time.Now().UTC(), Attempt: record.NewAttempt(), Kind: record.KindGuard,
 		Runner: path.Base(strings.Fields(runner)[0]), Detail: fmt.Sprintf("%s: %s", runner, command),
 	}})
 }

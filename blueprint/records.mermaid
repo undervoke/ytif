@@ -14,11 +14,11 @@ config:
 ---
 %% Behavior authority: internal/gate/gate.go (recordLines, writeRecords), internal/record/record.go, internal/cli/cli.go (runBoard), internal/board/board.go (Render), .github/workflows/ci.yml and README.md (Records and board).
 %% CI upload is configured by the host workflow; ytif itself writes a local file. Artifact retention is also host-owned.
-%% The record append occurs at gate finalization, including ordinary failures. An early exit or forced termination may leave no records; interrupted work has no completed result.
+%% Recording-enabled runs append at gate finalization, including ordinary failures. An early exit or forced termination may leave no records; interrupted work has no completed result.
 %% The board reads the --records paths when given, and the default local file otherwise.
 flowchart LR
   subgraph Host["CI · host workflow owns upload and retention"]
-    CIGate["ytif ci<br/><small>Workflow sets the mode and the record path</small>"]
+    CIGate["ytif ci<br/><small>Workflow sets the mode and --records path</small>"]
     CIRec@{ shape: doc, label: "Runner-local JSONL<br/><small>• Results, timings and selection<br/>• Full output stays in the CI console</small>" }
     Artifact@{ shape: cloud, label: "ytif-records artifact<br/><small>Uploaded even after a failed gate</small>" }
     CIGate -->|Append at finalization| CIRec
@@ -26,7 +26,7 @@ flowchart LR
   end
 
   subgraph Dev["Developer machine"]
-    LocalGate["Local gates<br/><small>check · commit · push · ci</small>"]
+    LocalGate["Local recording triggers<br/><small>• Agent: check<br/>• lefthook: commit / push --hook</small>"]
     Default@{ shape: doc, label: "Default local records<br/><small>• Git common dir, shared by worktrees<br/>• --records writes elsewhere</small>" }
     Download@{ shape: doc, label: "Downloaded JSONL<br/><small>Saved by the developer</small>" }
     Registry@{ shape: docs, label: "Current verification registry<br/><small>Root file and its includes</small>" }

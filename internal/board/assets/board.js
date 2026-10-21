@@ -541,7 +541,7 @@ function costPage() {
       const state = !s.known ? "" : (reg === 0 ? t("emptyRegistry") : (sel === 0 && s.effective_mode === "affected" ? t("affectedZero") : t("registered", fmt(reg), fmt(sel))));
       const detail = [s.base || s.head ? `base ${s.base || "–"} · head ${s.head || "–"}` : "", state,
         (s.omissions || []).length ? `${t("colOmit")} ${fmt(s.omissions.length)}` : ""].filter(Boolean).join(" · ");
-      return `<div class="runrow"><span class="mono">${esc(when(s.time))} · ${esc(s.gate || "")}${s.context ? " · " + esc(s.context) : ""}</span>
+      return `<div class="runrow"><span class="mono">${esc(when(s.time))} · ${esc(s.gate || "")}</span>
         <span>${esc(modeText(s))}${s.requested_mode && s.requested_mode !== s.effective_mode ? esc(` (${s.requested_mode} → ${s.effective_mode})`) : ""}${s.fallback ? " · " + esc(t("fallback", s.fallback)) : ""}${s.revision_mismatch ? " · " + esc(t("revisionMismatch")) : ""}${runStatus(s)}</span>
         <span class="note">${esc(detail)}</span></div>`;
     }).join("") + (runs.length > cost.runs ? `<div class="morebar"><button type="button" class="btn" id="rmore">${esc(t("more", fmt(Math.min(12, runs.length - cost.runs)), fmt(runs.length - cost.runs)))}</button></div>` : "")

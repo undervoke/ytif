@@ -47,7 +47,8 @@ run the pinned version.
 
 gate flags:
   --report github        emit GitHub Actions annotations
-  --records PATH         append records to PATH instead of the git common dir
+  --hook                 record commit/push as a hook-triggered run
+  --records PATH         record file (required for CI recording)
   --base REF             select Nx-affected verifications; absent means full
   --jobs N               bound concurrent processes (check: 2; other gates: CPU count)
 `
@@ -108,6 +109,10 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, version strin
 
 func runGate(ctx context.Context, name string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs, report, records := gateFlags(name, stderr)
+	var hook bool
+	if name == check.GateCommit || name == check.GatePush {
+		fs.BoolVar(&hook, "hook", false, "record this hook-triggered run")
+	}
 	defaultJobs := gate.DefaultJobs
 	if name == check.GateCheck {
 		defaultJobs = 2
@@ -133,6 +138,7 @@ func runGate(ctx context.Context, name string, args []string, stdin io.Reader, s
 	}
 	return gate.Run(ctx, root, gate.Options{
 		Gate: name, Base: deref(base), Jobs: *jobs, Report: *report, Records: *records, Stdin: refs,
+		Record: name == check.GateCheck || hook || name == check.GateCI && *records != "",
 		Stdout: stdout, Stderr: stderr, Sources: sources(), Config: configChecker(),
 	})
 }
@@ -249,7 +255,7 @@ func gateFlags(name string, stderr io.Writer) (*flag.FlagSet, *string, *string) 
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	report := fs.String("report", "", "annotation format: github")
-	records := fs.String("records", "", "append records to this file")
+	records := fs.String("records", "", "record file (required for CI recording)")
 	return fs, report, records
 }
 

@@ -22,6 +22,9 @@ go get -tool github.com/undervoke/ytif/cmd/ytif@v0.10.0
 Read every `ytif` below as `go tool ytif`. Outside a Go module, download a
 release archive and verify it against `SHA256SUMS`.
 
+Existing projects add `--hook` to their lefthook commit and push commands to
+keep recording.
+
 To upgrade a project whose ledger is a version 2 `ytif-inventory.yaml`, raise
 the pin and run `ytif migrate`. It lists the verifications that now also run
 at push; add `skip-push: true` where push must not run them.
@@ -160,10 +163,10 @@ not read what a `node-verify` function runs.
 # lefthook.yml
 pre-commit:
   jobs:
-    - run: go tool ytif commit
+    - run: go tool ytif commit --hook
 pre-push:
   jobs:
-    - run: go tool ytif push
+    - run: go tool ytif push --hook
       use_stdin: true
 ```
 
@@ -202,8 +205,10 @@ entries:
 
 ## Records and board
 
-Each gate run appends its results, timings, and selection to
-`<git-common-dir>/ytif/records.jsonl`, or to `--records PATH`.
+Agent-invoked `ytif check` and lefthook's `ytif commit --hook` / `ytif push --hook`
+append results, timings, and selection to `<git-common-dir>/ytif/records.jsonl`;
+`--records PATH` selects another destination. Remote CI workflows record with
+`ytif ci --records PATH` and publish that file as an artifact.
 `ytif list` shows verifications and findings.
 
 `ytif board` writes the ledger and its records as one HTML file and opens it;

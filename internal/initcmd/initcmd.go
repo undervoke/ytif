@@ -519,12 +519,12 @@ func lefthook(root string, w gateconf.Wiring) (file, error) {
 		return file{}, fmt.Errorf("%s: %w", rel, err)
 	}
 	if !w.Commit {
-		if err := addHook(top, "pre-commit", "ytif-commit", "go tool ytif commit", false); err != nil {
+		if err := addHook(top, "pre-commit", "ytif-commit", "go tool ytif commit --hook", false); err != nil {
 			return file{}, fmt.Errorf("%s: %w", rel, err)
 		}
 	}
 	if !w.Push {
-		if err := addHook(top, "pre-push", "ytif-push", "go tool ytif push", true); err != nil {
+		if err := addHook(top, "pre-push", "ytif-push", "go tool ytif push --hook", true); err != nil {
 			return file{}, fmt.Errorf("%s: %w", rel, err)
 		}
 	}

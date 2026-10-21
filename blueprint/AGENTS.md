@@ -23,7 +23,7 @@ Dispatch closes required co-runs within gate membership, then produces verdicts 
 
 ## records
 
-Gate names describe verification membership independently of the execution environment.
+Recording follows agent-invoked check, commit/push hooks, and remote CI workflows with an explicit record path.
 The host workflow owns CI artifact publication and retention; the developer supplies downloaded records to the board.
 The board combines the current registry with the chosen record files into a static snapshot.
 

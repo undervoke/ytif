@@ -141,7 +141,6 @@ type selectionOut struct {
 	Time    time.Time `json:"time"`
 	Attempt string    `json:"attempt"`
 	Gate    string    `json:"gate"`
-	Context string    `json:"context,omitempty"`
 	Outcome string    `json:"outcome,omitempty"`
 	record.Selection
 	// Known reports whether the record carried a selection payload. Old
@@ -238,10 +237,10 @@ func nonNil(s []string) []string {
 	return s
 }
 
-// aggregate sums result and invocation lines over every gate and context.
+// aggregate sums result and invocation lines over every gate.
 // Costs come from history only, never from present-day membership: a gate
 // total is the elapsed time its runs recorded. Selection lines share the
-// run's attempt, time, gate and context, so a run with zero selections
+// run's attempt, time and gate, so a run with zero selections
 // still counts as an attempt and an omission never becomes a pass or a
 // zero-duration result.
 func aggregate(lines []record.Line, meta *metaOut) (map[string]*checkStats, []invocationOut, map[string]*orphanOut, []selectionOut) {
@@ -253,10 +252,10 @@ func aggregate(lines []record.Line, meta *metaOut) (map[string]*checkStats, []in
 	var selections []selectionOut
 	seenSelections := map[string]bool{}
 	type oldGroup struct {
-		gate, context, attempt string
-		first                  time.Time
-		hasResult              bool
-		hasFail                bool
+		gate, attempt string
+		first         time.Time
+		hasResult     bool
+		hasFail       bool
 	}
 	olds := map[string]*oldGroup{}
 	seenReal := 0
@@ -305,20 +304,20 @@ func aggregate(lines []record.Line, meta *metaOut) (map[string]*checkStats, []in
 				p.MergeParents = []string{}
 			}
 			selections = append(selections, selectionOut{
-				Time: l.Time, Attempt: l.Attempt, Gate: l.Gate, Context: l.Context,
+				Time: l.Time, Attempt: l.Attempt, Gate: l.Gate,
 				Outcome: l.Outcome, Selection: p, Known: ok,
 			})
 			if l.Gate != "" {
-				seenSelections[l.Gate+"\x00"+l.Context+"\x00"+l.Attempt] = true
+				seenSelections[l.Gate+"\x00"+l.Attempt] = true
 			}
 			seenReal++
 			continue
 		}
 		if l.Gate != "" && l.Attempt != "" && (l.Kind == record.KindResult || l.Kind == record.KindInvocation) {
-			k := l.Gate + "\x00" + l.Context + "\x00" + l.Attempt
+			k := l.Gate + "\x00" + l.Attempt
 			g := olds[k]
 			if g == nil {
-				g = &oldGroup{gate: l.Gate, context: l.Context, attempt: l.Attempt, first: l.Time}
+				g = &oldGroup{gate: l.Gate, attempt: l.Attempt, first: l.Time}
 				olds[k] = g
 			} else if l.Time.Before(g.first) {
 				g.first = l.Time
@@ -370,7 +369,7 @@ func aggregate(lines []record.Line, meta *metaOut) (map[string]*checkStats, []in
 		meta.Attempts[g] = len(as)
 	}
 	meta.Selections = seenReal
-	// Synthesize one Known:false row per old gate/context/attempt that has
+	// Synthesize one Known:false row per old gate/attempt that has
 	// results or invocations but no selection line, so pre-selection history
 	// shows mode unknown instead of vanishing. Attempts that already carry
 	// a selection line are never duplicated.
@@ -385,7 +384,7 @@ func aggregate(lines []record.Line, meta *metaOut) (map[string]*checkStats, []in
 			outcome = string(check.Pass)
 		}
 		selections = append(selections, selectionOut{
-			Time: g.first, Attempt: g.attempt, Gate: g.gate, Context: g.context,
+			Time: g.first, Attempt: g.attempt, Gate: g.gate,
 			Outcome: outcome,
 			Selection: record.Selection{
 				Eligible: []string{}, Selected: []string{}, Omissions: []record.Omission{},
