@@ -79,6 +79,10 @@ func Run(root, self string, hosts []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "ytif init: nothing was changed")
 		return gate.ExitUsage
 	}
+	if err := formatFiles(root, files, stdout); err != nil {
+		fmt.Fprintf(stderr, "ytif init: %v\nytif init: nothing was changed\n", err)
+		return gate.ExitUsage
+	}
 	if pin.run {
 		if err := pinVendor(root, self); err != nil {
 			fmt.Fprintf(stderr, "ytif init: %v\nytif init: nothing was changed\n", err)
