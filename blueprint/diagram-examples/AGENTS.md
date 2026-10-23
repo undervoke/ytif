@@ -103,10 +103,6 @@
 
 @import "treemap.mermaid"
 
-## Tree view
-
-@import "treeview.mermaid"
-
 ## Ishikawa
 
 @import "ishikawa.mermaid"
