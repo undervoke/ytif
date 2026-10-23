@@ -1,2 +1,6 @@
 version: 3
-verifications: []
+verifications:
+  - runner: command
+    name: documentation
+    run: [dinyd, check, --worktree]
+    check: true

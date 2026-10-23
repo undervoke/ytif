@@ -10,6 +10,13 @@ entries:
     uses: actions/upload-artifact
     reason: Uploads the gate records.
   - surface: github-actions
+    run: |
+      version="$(tr -d '\r\n' < .dinyd-version)"
+      curl -fsSL "https://github.com/undervoke/dinyd/releases/download/v${version#v}/dinyd-installer.sh" -o "$RUNNER_TEMP/dinyd-installer.sh"
+      cd "$RUNNER_TEMP"
+      sh dinyd-installer.sh
+    reason: Installs the pinned DinyD runtime with its official installer.
+  - surface: github-actions
     run: test -z "$(gofmt -l .)"
     reason: Formatting is judged by gofmt.
   - surface: github-actions

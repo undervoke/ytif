@@ -10,3 +10,5 @@ require (
 )
 
 require golang.org/x/sys v0.47.0 // indirect
+
+tool github.com/undervoke/ytif/cmd/ytif

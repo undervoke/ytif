@@ -1,0 +1,9 @@
+pre-commit:
+  commands:
+    ytif-commit:
+      run: go tool ytif commit --hook
+pre-push:
+  commands:
+    ytif-push:
+      run: go tool ytif push --hook
+      use_stdin: true

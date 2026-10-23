@@ -13,24 +13,35 @@ config:
     wrappingWidth: 270
 ---
 %% Behavior authority: internal/gate/gate.go (Run), internal/gate/survey.go, internal/affected/affected.go and README.md (Gates).
+%% dinyd: internal/gate/gate.go#Run s1:bc59694ce3896912
 %% Invalid input exits before record creation. Admission findings reconcile and finish as an incomplete failed attempt, recorded when enabled.
 %% Affected selection covers registered work, not a complete census. A valid empty result does not trigger fallback; unresolved verification scopes still run.
 %% list uses complete discovery separately. A full local gate activates only sources owning selected members; effective-full CI activates every source.
+%% dinyd: internal/gate/survey.go#NewSurvey s1:1dcd730c4a5522ac
 flowchart TB
   Input["Validate configuration and revisions<br/><small>Admission runs before project execution</small>"]
   Invalid["Report input or load error<br/><small>No records are written</small>"]
   Rejected["Reconcile admission findings<br/><small>No Nx, preparation, discovery or execution</small>"]
   Members["Gate members<br/><small>• check and commit opt in independently<br/>• push includes all except skip-push<br/>• CI includes all verifications</small>"]
+  %% dinyd: internal/inventory/inventory.go#Entry.Member s1:b9c171c2f6703344
   Mode{"Affected requested?<br/><small>Host supplies the comparison base</small>"}
   Nx{"Usable Nx result?"}
+  %% dinyd: internal/affected/affected.go#NxFiles s1:8f314da9552c6164
   Full["Keep all gate members<br/><small>Effective mode: full</small>"]
   Affected["Keep affected and unresolved members<br/><small>Commands have unknown dependency scope</small>"]
+  %% dinyd: internal/affected/affected.go#Graph.Unaffected s1:a5c4be89c62d7ba9
   Census{"CI with effective full mode?"}
   All["Activate every source<br/><small>Complete discovery, including unregistered work</small>"]
   Selected["Activate selected sources<br/><small>Inactive sources are not judged missing or stale</small>"]
   Discover["Prepare and discover<br/><small>Only active sources need preparation</small>"]
+  %% dinyd: internal/gate/survey.go#Survey.prepare s1:06d49989583edac2
+  %% dinyd: internal/gate/survey.go#Survey.discover s1:7acebb91411823be
   Reconcile["Reconcile and restore co-runs<br/><small>Required partners must share gate membership</small>"]
+  %% dinyd: internal/gate/gate.go#closeCoRuns s1:0d6266841e3d3efc
+  %% dinyd: internal/gate/survey.go#Survey.placementOrder s1:b5ab8cad6cf0cc71
   Run["Execute runnable selections<br/><small>Shared process limit and command-exclusive tokens</small>"]
+  %% dinyd: internal/proc/proc.go#Run s1:ef10d4d2314b589e
+  %% dinyd: internal/checkrun/checkrun.go#Source.execute s1:276c8ae375a5dd22
   Finish["Aggregate verdict and record when enabled<br/><small>Keep outcomes distinct from selection and omission</small>"]
 
   Input -->|Invalid input or load failure| Invalid

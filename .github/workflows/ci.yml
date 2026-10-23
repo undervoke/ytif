@@ -16,6 +16,13 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+      - name: DinyD
+        shell: bash
+        run: |
+          version="$(tr -d '\r\n' < .dinyd-version)"
+          curl -fsSL "https://github.com/undervoke/dinyd/releases/download/v${version#v}/dinyd-installer.sh" -o "$RUNNER_TEMP/dinyd-installer.sh"
+          cd "$RUNNER_TEMP"
+          sh dinyd-installer.sh
       - name: gofmt
         run: test -z "$(gofmt -l .)"
       - name: vet
