@@ -1,7 +1,8 @@
 // Package board renders the verification ledger and its records as one
-// static HTML page: the verification list, a relation diagram, cost and
-// hits, run selection context, and the vocabulary. The page makes no
-// network requests.
+// static HTML page: the verification list with the ledger's file tree, the
+// relation diagram, the vocabulary, and the time and hit statistics the
+// records support. The page makes no network requests; CI records reach it
+// from the local cache.
 package board
 
 import (
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/undervoke/ytif/internal/check"
+	"github.com/undervoke/ytif/internal/cirecords"
 	"github.com/undervoke/ytif/internal/inventory"
 	"github.com/undervoke/ytif/internal/record"
 )
@@ -33,30 +35,46 @@ func DefaultPath(commonDir string) string {
 // GateCheck aliases the agent-invocable gate name for board display order.
 const GateCheck = check.GateCheck
 
-// gateOrder is the display order for membership badges and cost totals.
+// gateOrder is the display order for gates.
 var gateOrder = []string{check.GateCheck, check.GateCommit, check.GatePush, check.GateCI}
 
-// Render builds the page from the assets, the verification ledger under
-// root, and the record lines.
-func Render(assets fs.FS, root string, lines []record.Line, now time.Time) ([]byte, error) {
-	src := map[string]string{}
-	for _, name := range []string{"board.html", "board.css", "board.js", "icons.svg"} {
+// recentFailDays bounds the failure flag a row carries.
+const recentFailDays = 30
+
+// Sources are the records and the branch the page shows: the local record
+// lines, the CI lines read from the artifact cache, the checked-out branch,
+// each CI attempt's branch, and the CI sync status. A nil Status leaves CI out
+// of the page, as on a repository whose origin is not GitHub.
+type Sources struct {
+	Local        []record.Line
+	Remote       []record.Line
+	Branch       string
+	RemoteBranch map[string]string
+	Status       *cirecords.Status
+}
+
+// Render builds the page from the assets, the verification ledger under root,
+// and the records.
+func Render(assets fs.FS, root string, src Sources, now time.Time) ([]byte, error) {
+	names := []string{"board.html", "board.css", "board.js", "icons.svg"}
+	files := map[string]string{}
+	for _, name := range names {
 		b, err := fs.ReadFile(assets, name)
 		if err != nil {
 			return nil, err
 		}
-		src[name] = string(b)
+		files[name] = string(b)
 	}
 	inv, err := inventory.LoadInventory(root)
 	if err != nil {
 		return nil, err
 	}
-	data, err := json.Marshal(build(filepath.Base(root), inv, lines, now))
+	data, err := json.Marshal(build(filepath.Base(root), inv, src, now))
 	if err != nil {
 		return nil, err
 	}
 	// json.Marshal escapes <, >, and &, so the data cannot close its script.
-	out := strings.NewReplacer("/*STYLE*/", src["board.css"], "/*SCRIPT*/", src["board.js"], "/*ICONS*/", src["icons.svg"], "/*DATA*/", string(data)).Replace(src["board.html"])
+	out := strings.NewReplacer("/*STYLE*/", files["board.css"], "/*SCRIPT*/", files["board.js"], "/*ICONS*/", files["icons.svg"], "/*DATA*/", string(data)).Replace(files["board.html"])
 	return []byte(out), nil
 }
 
@@ -87,89 +105,160 @@ type groupOut struct {
 	Tags       []tagOut `json:"tags"`
 }
 
-type checkStats struct {
-	Runs        int              `json:"runs"`
-	Hits        int              `json:"hits"`
-	TotalMS     int64            `json:"total_ms"`
-	Timed       int              `json:"timed"`
-	ByGate      map[string]int64 `json:"by_gate"`       // gate → elapsed ms, from history only
-	ByGateTimed map[string]int   `json:"by_gate_timed"` // gate → timed outcomes, so unknown time renders as unknown
+// meanOut is one gate's average and the samples it used, at most the gate's
+// window.
+type meanOut struct {
+	MS int64 `json:"ms"`
+	K  int   `json:"k"`
 }
 
 type verificationOut struct {
-	Key        string      `json:"key"`
-	Runner     string      `json:"runner"`
-	Unit       string      `json:"unit"`
-	Name       string      `json:"name"`
-	Check      bool        `json:"check"`
-	Commit     bool        `json:"commit"`
-	SkipPush   bool        `json:"skip_push"`
-	Gates      []string    `json:"gates"` // member gates in gateOrder
-	IsCommand  bool        `json:"is_command"`
-	Run        []string    `json:"run,omitempty"`
-	Cwd        string      `json:"cwd,omitempty"`
-	Exclusive  []string    `json:"exclusive,omitempty"`
-	Origin     string      `json:"origin,omitempty"`
-	Tags       []string    `json:"tags"`
-	Requires   []string    `json:"requires"`
-	Ensures    []string    `json:"ensures"`
-	Accident   string      `json:"accident,omitempty"`
-	Detection  string      `json:"detection,omitempty"`
-	Impact     string      `json:"impact,omitempty"`
-	DeleteWhen string      `json:"delete_when,omitempty"`
-	Stats      *checkStats `json:"stats"`
+	Key        string             `json:"key"`
+	Runner     string             `json:"runner"`
+	Unit       string             `json:"unit"`
+	Name       string             `json:"name"`
+	Check      bool               `json:"check"`
+	Commit     bool               `json:"commit"`
+	SkipPush   bool               `json:"skip_push"`
+	Gates      []string           `json:"gates"` // member gates in gateOrder
+	IsCommand  bool               `json:"is_command"`
+	Run        []string           `json:"run,omitempty"`
+	Cwd        string             `json:"cwd,omitempty"`
+	Exclusive  []string           `json:"exclusive,omitempty"`
+	Origin     string             `json:"origin,omitempty"`
+	File       string             `json:"file,omitempty"`
+	Tags       []string           `json:"tags"`
+	Requires   []string           `json:"requires"`
+	Ensures    []string           `json:"ensures"`
+	Accident   string             `json:"accident,omitempty"`
+	Detection  string             `json:"detection,omitempty"`
+	Impact     string             `json:"impact,omitempty"`
+	DeleteWhen string             `json:"delete_when,omitempty"`
+	Means      map[string]meanOut `json:"means"`
+	Hits       map[string]int     `json:"hits"`
+	OnBranch   bool               `json:"on_branch"`
+	RecentFail bool               `json:"recent_fail"`
 }
 
-type invocationOut struct {
-	Runner  string `json:"runner"`
-	What    string `json:"what"`
-	Unit    string `json:"unit"`
-	Runs    int    `json:"runs"`
-	Timed   int    `json:"timed"`
-	TotalMS int64  `json:"total_ms"`
+type processOut struct {
+	Runner string             `json:"runner"`
+	What   string             `json:"what"`
+	Unit   string             `json:"unit"`
+	Means  map[string]meanOut `json:"means"`
 }
 
-type orphanOut struct {
-	Key          string     `json:"key"`
-	Runs         int        `json:"runs"`
-	Hits         int        `json:"hits"`
-	LastFail     *time.Time `json:"last_fail,omitempty"`
-	LastFailGate string     `json:"last_fail_gate,omitempty"`
+type fileOut struct {
+	Path   string `json:"path"`
+	Parent string `json:"parent,omitempty"`
 }
 
-type selectionOut struct {
-	Time    time.Time `json:"time"`
-	Attempt string    `json:"attempt"`
-	Gate    string    `json:"gate"`
-	Outcome string    `json:"outcome,omitempty"`
-	record.Selection
-	// Known reports whether the record carried a selection payload. Old
-	// records predate selection tracking and show mode unknown.
-	Known bool `json:"known"`
+type omissionOut struct {
+	Key    string    `json:"key"`
+	Reason string    `json:"reason"`
+	Gate   string    `json:"gate"`
+	Time   time.Time `json:"time"`
+}
+
+// gateAverageOut is one gate's row in the average total: the sum of its
+// members' means, null when no member has a sample, and its hit total.
+type gateAverageOut struct {
+	Gate string `json:"gate"`
+	MS   *int64 `json:"ms"`
+	Hits int    `json:"hits"`
+}
+
+// gateBranchOut is one gate's row on the current branch: the timed results of
+// its latest attempt there, null when none of them is timed.
+type gateBranchOut struct {
+	Gate string    `json:"gate"`
+	MS   *int64    `json:"ms"`
+	Time time.Time `json:"time"`
+}
+
+type summaryOut struct {
+	Average []gateAverageOut `json:"average"`
+	Branch  []gateBranchOut  `json:"branch"`
+}
+
+// spanOut is a record population's time range and its attempts per gate.
+type spanOut struct {
+	From     *time.Time     `json:"from,omitempty"`
+	To       *time.Time     `json:"to,omitempty"`
+	Attempts map[string]int `json:"attempts"`
+}
+
+// criteriaOut states the windows the page's figures use: the timed samples a
+// mean keeps per gate, and the population a hit is counted in.
+type criteriaOut struct {
+	Average map[string]int `json:"average"`
+	Hits    hitWindowOut   `json:"hits"`
+}
+
+type hitWindowOut struct {
+	Days int            `json:"days"`
+	Last map[string]int `json:"last,omitempty"`
+}
+
+type ciOut struct {
+	Repo     string     `json:"repo"`
+	From     *time.Time `json:"from,omitempty"`
+	To       *time.Time `json:"to,omitempty"`
+	Attempts int        `json:"attempts"`
+	Synced   *time.Time `json:"synced,omitempty"`
+	Pending  int        `json:"pending"`
+	Status   string     `json:"status,omitempty"`
 }
 
 type metaOut struct {
-	Repo       string         `json:"repo"`
-	Version    int            `json:"version"`
-	Generated  time.Time      `json:"generated"`
-	From       *time.Time     `json:"from,omitempty"`
-	To         *time.Time     `json:"to,omitempty"`
-	Attempts   map[string]int `json:"attempts"`   // gate → gate runs with results or selections
-	Selections int            `json:"selections"` // selection records seen
+	Repo      string      `json:"repo"`
+	Version   int         `json:"version"`
+	Generated time.Time   `json:"generated"`
+	Branch    string      `json:"branch"`
+	Criteria  criteriaOut `json:"criteria"`
+	Local     spanOut     `json:"local"`
+	CI        *ciOut      `json:"ci,omitempty"`
 }
 
 type boardData struct {
 	Meta          metaOut           `json:"meta"`
 	Groups        []groupOut        `json:"groups"`
+	Files         []fileOut         `json:"files"`
 	Verifications []verificationOut `json:"verifications"`
-	Selections    []selectionOut    `json:"selections"`
-	Invocations   []invocationOut   `json:"invocations"`
-	Orphans       []orphanOut       `json:"orphans"`
+	Processes     []processOut      `json:"processes"`
+	Summary       summaryOut        `json:"summary"`
+	Omissions     []omissionOut     `json:"omissions"`
 }
 
-func build(repo string, inv inventory.Inventory, lines []record.Line, now time.Time) boardData {
-	d := boardData{Meta: metaOut{Repo: repo, Version: inv.Version, Generated: now.UTC(), Attempts: map[string]int{}}}
+func build(repo string, inv inventory.Inventory, src Sources, now time.Time) boardData {
+	settings := inv.Board.Settings()
+	local := withoutGate(src.Local, check.GateCI)
+	remote := onlyGate(src.Remote, check.GateCI)
+	lines := append(append([]record.Line(nil), local...), remote...)
+	sort.SliceStable(lines, func(i, j int) bool { return lines[i].Time.Before(lines[j].Time) })
+	ix := newIndex(lines, src)
 
+	d := boardData{
+		Meta: metaOut{
+			Repo: repo, Version: inv.Version, Generated: now.UTC(), Branch: src.Branch,
+			Criteria: criteriaOut{Average: settings.Average, Hits: hitWindowOut{Days: settings.HitDays, Last: settings.HitLast}},
+			Local:    spanOf(local),
+		},
+		Groups:        []groupOut{},
+		Files:         files(inv),
+		Verifications: []verificationOut{},
+		Omissions:     omissions(lines),
+	}
+	if src.Status != nil {
+		sp := spanOf(remote)
+		d.Meta.CI = &ciOut{
+			Repo: src.Status.Repo, From: sp.From, To: sp.To, Attempts: sp.Attempts[check.GateCI],
+			Pending: src.Status.Pending, Status: src.Status.Kind,
+		}
+		if !src.Status.Synced.IsZero() {
+			synced := src.Status.Synced.UTC()
+			d.Meta.CI.Synced = &synced
+		}
+	}
 	for _, g := range inventory.Builtin {
 		d.Groups = append(d.Groups, group(g, "ytif"))
 	}
@@ -177,17 +266,22 @@ func build(repo string, inv inventory.Inventory, lines []record.Line, now time.T
 		d.Groups = append(d.Groups, group(g, "project"))
 	}
 
-	stats, invs, orphans, selections := aggregate(lines, &d.Meta)
-	d.Selections = selections
-	listed := map[string]bool{}
+	means, procs := aggregate(lines, settings.Average)
+	d.Processes = procs
+	hits := record.Hits(window(lines, now, settings))
+	onBranch, recentFail := flags(lines, ix, src.Branch, now)
+
 	for _, e := range inv.Verifications {
 		k := e.Key().String()
-		listed[k] = true
-		gates := []string{}
+		var gates []string
 		for _, g := range gateOrder {
 			if e.Member(g) {
 				gates = append(gates, g)
 			}
+		}
+		h := hits[k]
+		if h == nil {
+			h = map[string]int{}
 		}
 		d.Verifications = append(d.Verifications, verificationOut{
 			Key: k, Runner: e.Runner, Unit: e.Key().Unit, Name: e.Name,
@@ -195,19 +289,386 @@ func build(repo string, inv inventory.Inventory, lines []record.Line, now time.T
 			IsCommand: e.Runner == inventory.CommandRunner,
 			Run:       append([]string(nil), e.Run...),
 			Cwd:       e.Cwd, Exclusive: append([]string(nil), e.Exclusive...),
-			Origin: e.Origin,
-			Tags:   nonNil(e.Tags), Requires: refs(e.Requires), Ensures: refs(e.Ensures),
-			Accident: e.Accident, Detection: e.Detection, Impact: e.Impact, DeleteWhen: e.DeleteWhen, Stats: stats[k],
+			Origin: e.Origin, File: e.File,
+			Tags: nonNil(e.Tags), Requires: refs(e.Requires), Ensures: refs(e.Ensures),
+			Accident: e.Accident, Detection: e.Detection, Impact: e.Impact, DeleteWhen: e.DeleteWhen,
+			Means:      ofGates(means[k], gates),
+			Hits:       h,
+			OnBranch:   onBranch[k],
+			RecentFail: recentFail[k],
 		})
 	}
-	d.Invocations = invs
-	for k, o := range orphans {
-		if !listed[k] {
-			d.Orphans = append(d.Orphans, *o)
+	d.Summary = summarize(settings, d.Verifications, means, ix, src.Branch)
+	return d
+}
+
+// gatesOf reports, per gate, the verifications that belong to it.
+func gatesOf(vs []verificationOut) map[string][]verificationOut {
+	out := map[string][]verificationOut{}
+	for _, v := range vs {
+		for _, g := range v.Gates {
+			out[g] = append(out[g], v)
 		}
 	}
-	sort.Slice(d.Orphans, func(i, j int) bool { return d.Orphans[i].Key < d.Orphans[j].Key })
-	return d
+	return out
+}
+
+// summarize states each gate's average total and its total on the current
+// branch. The time sums the current members, and the hits count every
+// verification's catches at the gate, as its cells do. A gate with neither
+// members nor hits has no row; a gate with no sampled member keeps its row
+// with no time.
+func summarize(s inventory.Settings, vs []verificationOut, means map[string]map[string]meanOut, ix index, branch string) summaryOut {
+	out := summaryOut{Average: []gateAverageOut{}, Branch: []gateBranchOut{}}
+	members := gatesOf(vs)
+	for _, g := range gateOrder {
+		count := 0
+		for _, v := range vs {
+			count += v.Hits[g]
+		}
+		member := members[g]
+		if len(member) == 0 && count == 0 {
+			continue
+		}
+		var sum int64
+		sampled := false
+		for _, v := range member {
+			if m, ok := means[v.Key][g]; ok {
+				sum += m.MS
+				sampled = true
+			}
+		}
+		row := gateAverageOut{Gate: g, Hits: count}
+		if sampled {
+			total := sum
+			row.MS = &total
+		}
+		out.Average = append(out.Average, row)
+	}
+	if branch == "" {
+		return out
+	}
+	for _, g := range gateOrder {
+		attempt, ok := ix.latest(branch, g)
+		if !ok {
+			continue
+		}
+		row := gateBranchOut{Gate: g, Time: attempt.first}
+		var sum int64
+		timed := false
+		for _, ms := range attempt.elapsed {
+			sum += ms
+			timed = true
+		}
+		if timed {
+			total := sum
+			row.MS = &total
+		}
+		out.Branch = append(out.Branch, row)
+	}
+	return out
+}
+
+// aggregate averages timed results per verification and gate, and timed
+// invocations per process. Samples are already in time order.
+func aggregate(lines []record.Line, limit map[string]int) (map[string]map[string]meanOut, []processOut) {
+	type procID struct{ runner, what, unit string }
+	samples := map[string]map[string][]int64{}
+	procSamples := map[procID]map[string][]int64{}
+	for _, l := range lines {
+		switch l.Kind {
+		case record.KindResult:
+			if l.ElapsedMS == nil || l.Key == "" {
+				continue
+			}
+			if samples[l.Key] == nil {
+				samples[l.Key] = map[string][]int64{}
+			}
+			samples[l.Key][l.Gate] = append(samples[l.Key][l.Gate], *l.ElapsedMS)
+		case record.KindInvocation:
+			if l.ElapsedMS == nil {
+				continue
+			}
+			id := procID{l.Runner, l.What, l.Unit}
+			if procSamples[id] == nil {
+				procSamples[id] = map[string][]int64{}
+			}
+			procSamples[id][l.Gate] = append(procSamples[id][l.Gate], *l.ElapsedMS)
+		}
+	}
+	means := map[string]map[string]meanOut{}
+	for key, byGate := range samples {
+		means[key] = meansOf(byGate, limit)
+	}
+	type process struct {
+		processOut
+		total int64
+	}
+	var procs []process
+	for id, byGate := range procSamples {
+		m := meansOf(byGate, limit)
+		p := process{processOut: processOut{Runner: id.runner, What: id.what, Unit: id.unit, Means: m}}
+		for _, v := range m {
+			p.total += v.MS
+		}
+		procs = append(procs, p)
+	}
+	sort.Slice(procs, func(i, j int) bool {
+		if procs[i].total != procs[j].total {
+			return procs[i].total > procs[j].total
+		}
+		if procs[i].Runner != procs[j].Runner {
+			return procs[i].Runner < procs[j].Runner
+		}
+		if procs[i].Unit != procs[j].Unit {
+			return procs[i].Unit < procs[j].Unit
+		}
+		return procs[i].What < procs[j].What
+	})
+	out := make([]processOut, 0, len(procs))
+	for _, p := range procs {
+		out = append(out, p.processOut)
+	}
+	return means, out
+}
+
+// meansOf averages the last n samples per gate and keeps the count it used.
+func meansOf(samples map[string][]int64, limit map[string]int) map[string]meanOut {
+	out := map[string]meanOut{}
+	for gate, vals := range samples {
+		if n := limit[gate]; n > 0 && len(vals) > n {
+			vals = vals[len(vals)-n:]
+		}
+		var sum int64
+		for _, v := range vals {
+			sum += v
+		}
+		out[gate] = meanOut{MS: sum / int64(len(vals)), K: len(vals)}
+	}
+	return out
+}
+
+// window keeps the lines hits are counted from: those inside the hit days, and
+// per gate only the lines of its latest attempts when the ledger limits them.
+// Lines keep their order, so the runs record.Hits follows stay intact.
+func window(lines []record.Line, now time.Time, s inventory.Settings) []record.Line {
+	from := now.AddDate(0, 0, -s.HitDays)
+	kept := make([]record.Line, 0, len(lines))
+	for _, l := range lines {
+		if l.Time.Before(from) {
+			continue
+		}
+		kept = append(kept, l)
+	}
+	if len(s.HitLast) == 0 {
+		return kept
+	}
+	first := map[string]map[string]time.Time{}
+	for _, l := range kept {
+		if l.Attempt == "" {
+			continue
+		}
+		if first[l.Gate] == nil {
+			first[l.Gate] = map[string]time.Time{}
+		}
+		if t, ok := first[l.Gate][l.Attempt]; !ok || l.Time.Before(t) {
+			first[l.Gate][l.Attempt] = l.Time
+		}
+	}
+	keep := map[string]map[string]bool{}
+	for gate, n := range s.HitLast {
+		type attempt struct {
+			id    string
+			first time.Time
+		}
+		var all []attempt
+		for id, t := range first[gate] {
+			all = append(all, attempt{id, t})
+		}
+		sort.Slice(all, func(i, j int) bool {
+			if !all[i].first.Equal(all[j].first) {
+				return all[i].first.Before(all[j].first)
+			}
+			return all[i].id < all[j].id
+		})
+		if len(all) > n {
+			all = all[len(all)-n:]
+		}
+		keep[gate] = map[string]bool{}
+		for _, a := range all {
+			keep[gate][a.id] = true
+		}
+	}
+	out := make([]record.Line, 0, len(kept))
+	for _, l := range kept {
+		if attempt, limited := keep[l.Gate]; limited && l.Attempt != "" && !attempt[l.Attempt] {
+			continue
+		}
+		out = append(out, l)
+	}
+	return out
+}
+
+// flags reports, per verification key, whether it has a result on the current
+// branch and whether it failed recently.
+func flags(lines []record.Line, ix index, branch string, now time.Time) (onBranch, recentFail map[string]bool) {
+	cutoff := now.AddDate(0, 0, -recentFailDays)
+	onBranch, recentFail = map[string]bool{}, map[string]bool{}
+	for _, l := range lines {
+		if l.Kind != record.KindResult || l.Key == "" {
+			continue
+		}
+		if branch != "" && ix.branch[l.Attempt] == branch {
+			onBranch[l.Key] = true
+		}
+		if l.Outcome == string(check.Fail) && !l.Time.Before(cutoff) {
+			recentFail[l.Key] = true
+		}
+	}
+	return onBranch, recentFail
+}
+
+// index is what the lines say about each attempt: the branch it ran on, when
+// it produced its first line, and its timed results.
+type index struct {
+	branch map[string]string    // attempt → branch
+	gate   map[string]string    // attempt → gate
+	first  map[string]time.Time // attempt → first line time
+	timed  map[string][]int64   // attempt → timed result milliseconds
+}
+
+func newIndex(lines []record.Line, src Sources) index {
+	ix := index{branch: map[string]string{}, gate: map[string]string{}, first: map[string]time.Time{}, timed: map[string][]int64{}}
+	for a, b := range src.RemoteBranch {
+		ix.branch[a] = b
+	}
+	for _, l := range lines {
+		if l.Attempt == "" {
+			continue
+		}
+		if t, ok := ix.first[l.Attempt]; !ok || l.Time.Before(t) {
+			ix.first[l.Attempt] = l.Time
+		}
+		if l.Gate != "" {
+			ix.gate[l.Attempt] = l.Gate
+		}
+		if l.Kind == record.KindSelection && l.Selection != nil && l.Selection.Branch != "" {
+			ix.branch[l.Attempt] = l.Selection.Branch
+		}
+		if l.Kind == record.KindResult && l.ElapsedMS != nil {
+			ix.timed[l.Attempt] = append(ix.timed[l.Attempt], *l.ElapsedMS)
+		}
+	}
+	return ix
+}
+
+// latest returns the attempt of gate that ran last on branch. Two attempts
+// that started at the same time resolve by id, so a page never moves between
+// builds.
+func (ix index) latest(branch, gate string) (attemptInfo, bool) {
+	var best attemptInfo
+	found := false
+	for id, g := range ix.gate {
+		if g != gate || ix.branch[id] != branch {
+			continue
+		}
+		info := attemptInfo{id: id, first: ix.first[id], elapsed: ix.timed[id]}
+		if !found || info.first.After(best.first) || info.first.Equal(best.first) && info.id < best.id {
+			best, found = info, true
+		}
+	}
+	return best, found
+}
+
+// attemptInfo is one attempt's start and the timed results it recorded.
+type attemptInfo struct {
+	id      string
+	first   time.Time
+	elapsed []int64
+}
+
+// spanOf reports the range and attempts per gate of one record population.
+func spanOf(lines []record.Line) spanOut {
+	s := spanOut{Attempts: map[string]int{}}
+	seen := map[string]map[string]bool{}
+	for _, l := range lines {
+		switch l.Kind {
+		case record.KindResult, record.KindInvocation, record.KindSelection:
+		default:
+			continue
+		}
+		t := l.Time
+		if s.From == nil || t.Before(*s.From) {
+			s.From = &t
+		}
+		if s.To == nil || t.After(*s.To) {
+			s.To = &t
+		}
+		if l.Gate == "" || l.Attempt == "" {
+			continue
+		}
+		if seen[l.Gate] == nil {
+			seen[l.Gate] = map[string]bool{}
+		}
+		seen[l.Gate][l.Attempt] = true
+	}
+	for g, a := range seen {
+		s.Attempts[g] = len(a)
+	}
+	return s
+}
+
+// omissions keeps the latest omission the records hold for each key.
+func omissions(lines []record.Line) []omissionOut {
+	latest := map[string]omissionOut{}
+	for _, l := range lines {
+		if l.Kind != record.KindSelection || l.Selection == nil {
+			continue
+		}
+		for _, o := range l.Selection.Omissions {
+			if cur, ok := latest[o.Key]; ok && !cur.Time.Before(l.Time) {
+				continue
+			}
+			latest[o.Key] = omissionOut{Key: o.Key, Reason: o.Reason, Gate: l.Gate, Time: l.Time}
+		}
+	}
+	out := make([]omissionOut, 0, len(latest))
+	for _, o := range latest {
+		out = append(out, o)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out
+}
+
+// withoutGate drops the lines a gate recorded.
+func withoutGate(lines []record.Line, gate string) []record.Line {
+	out := make([]record.Line, 0, len(lines))
+	for _, l := range lines {
+		if l.Gate != gate {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// onlyGate keeps the lines one gate recorded.
+func onlyGate(lines []record.Line, gate string) []record.Line {
+	out := make([]record.Line, 0, len(lines))
+	for _, l := range lines {
+		if l.Gate == gate {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// files lists the ledger files in visit order.
+func files(inv inventory.Inventory) []fileOut {
+	out := make([]fileOut, 0, len(inv.Files))
+	for _, f := range inv.Files {
+		out = append(out, fileOut{Path: f.Path, Parent: f.Parent})
+	}
+	return out
 }
 
 func group(g inventory.Group, owner string) groupOut {
@@ -237,182 +698,15 @@ func nonNil(s []string) []string {
 	return s
 }
 
-// aggregate sums result and invocation lines over every gate.
-// Costs come from history only, never from present-day membership: a gate
-// total is the elapsed time its runs recorded. Selection lines share the
-// run's attempt, time and gate, so a run with zero selections
-// still counts as an attempt and an omission never becomes a pass or a
-// zero-duration result.
-func aggregate(lines []record.Line, meta *metaOut) (map[string]*checkStats, []invocationOut, map[string]*orphanOut, []selectionOut) {
-	stats := map[string]*checkStats{}
-	orphans := map[string]*orphanOut{}
-	type invID struct{ runner, what, unit string }
-	invs := map[invID]*invocationOut{}
-	attempts := map[string]map[string]bool{}
-	var selections []selectionOut
-	seenSelections := map[string]bool{}
-	type oldGroup struct {
-		gate, attempt string
-		first         time.Time
-		hasResult     bool
-		hasFail       bool
-	}
-	olds := map[string]*oldGroup{}
-	seenReal := 0
-
-	ordered := append([]record.Line(nil), lines...)
-	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Time.Before(ordered[j].Time) })
-	for _, l := range ordered {
-		switch l.Kind {
-		case record.KindResult, record.KindInvocation, record.KindSelection:
-		default:
-			continue
-		}
-		t := l.Time
-		if meta.From == nil {
-			meta.From = &t
-		}
-		meta.To = &t
-		if l.Gate != "" && l.Attempt != "" {
-			if attempts[l.Gate] == nil {
-				attempts[l.Gate] = map[string]bool{}
-			}
-			attempts[l.Gate][l.Attempt] = true
-		}
-		if l.Kind == record.KindSelection {
-			p := record.Selection{}
-			ok := l.Selection != nil
-			if ok {
-				p = *l.Selection
-			}
-			if p.Eligible == nil {
-				p.Eligible = []string{}
-			}
-			if p.Selected == nil {
-				p.Selected = []string{}
-			}
-			if p.Omissions == nil {
-				p.Omissions = []record.Omission{}
-			}
-			if p.Bases == nil {
-				p.Bases = []string{}
-			}
-			if p.Tips == nil {
-				p.Tips = []string{}
-			}
-			if p.MergeParents == nil {
-				p.MergeParents = []string{}
-			}
-			selections = append(selections, selectionOut{
-				Time: l.Time, Attempt: l.Attempt, Gate: l.Gate,
-				Outcome: l.Outcome, Selection: p, Known: ok,
-			})
-			if l.Gate != "" {
-				seenSelections[l.Gate+"\x00"+l.Attempt] = true
-			}
-			seenReal++
-			continue
-		}
-		if l.Gate != "" && l.Attempt != "" && (l.Kind == record.KindResult || l.Kind == record.KindInvocation) {
-			k := l.Gate + "\x00" + l.Attempt
-			g := olds[k]
-			if g == nil {
-				g = &oldGroup{gate: l.Gate, attempt: l.Attempt, first: l.Time}
-				olds[k] = g
-			} else if l.Time.Before(g.first) {
-				g.first = l.Time
-			}
-			if l.Kind == record.KindResult {
-				g.hasResult = true
-				if l.Outcome == string(check.Fail) {
-					g.hasFail = true
-				}
-			}
-		}
-		if l.Kind == record.KindInvocation {
-			id := invID{l.Runner, l.What, l.Unit}
-			v := invs[id]
-			if v == nil {
-				v = &invocationOut{Runner: l.Runner, What: l.What, Unit: l.Unit}
-				invs[id] = v
-			}
-			v.Runs++
-			if l.ElapsedMS != nil {
-				v.Timed++
-				v.TotalMS += *l.ElapsedMS
-			}
-			continue
-		}
-		s := stats[l.Key]
-		if s == nil {
-			s = &checkStats{ByGate: map[string]int64{}, ByGateTimed: map[string]int{}}
-			stats[l.Key] = s
-		}
-		s.Runs++
-		if l.ElapsedMS != nil {
-			s.TotalMS += *l.ElapsedMS
-			s.Timed++
-			s.ByGate[l.Gate] += *l.ElapsedMS
-			s.ByGateTimed[l.Gate]++
-		}
-		o := orphans[l.Key]
-		if o == nil {
-			o = &orphanOut{Key: l.Key}
-			orphans[l.Key] = o
-		}
-		o.Runs++
-		if l.Outcome == string(check.Fail) {
-			o.LastFail, o.LastFailGate = &t, l.Gate
+// ofGates keeps a verification's means at the gates it belongs to now, so its
+// time agrees with the gate sums. Hits keep every gate: a catch stays evidence
+// after the verification leaves the gate.
+func ofGates(m map[string]meanOut, gates []string) map[string]meanOut {
+	out := map[string]meanOut{}
+	for _, g := range gates {
+		if v, ok := m[g]; ok {
+			out[g] = v
 		}
 	}
-	for g, as := range attempts {
-		meta.Attempts[g] = len(as)
-	}
-	meta.Selections = seenReal
-	// Synthesize one Known:false row per old gate/attempt that has
-	// results or invocations but no selection line, so pre-selection history
-	// shows mode unknown instead of vanishing. Attempts that already carry
-	// a selection line are never duplicated.
-	for k, g := range olds {
-		if seenSelections[k] {
-			continue
-		}
-		outcome := ""
-		if g.hasFail {
-			outcome = string(check.Fail)
-		} else if g.hasResult {
-			outcome = string(check.Pass)
-		}
-		selections = append(selections, selectionOut{
-			Time: g.first, Attempt: g.attempt, Gate: g.gate,
-			Outcome: outcome,
-			Selection: record.Selection{
-				Eligible: []string{}, Selected: []string{}, Omissions: []record.Omission{},
-				Bases: []string{}, Tips: []string{}, MergeParents: []string{},
-			},
-			Known: false,
-		})
-	}
-	sort.SliceStable(selections, func(i, j int) bool { return selections[i].Time.Before(selections[j].Time) })
-
-	for k, n := range record.Hits(lines) {
-		if s := stats[k]; s != nil {
-			s.Hits = n
-		}
-		if o := orphans[k]; o != nil {
-			o.Hits = n
-		}
-	}
-
-	out := []invocationOut{}
-	for _, v := range invs {
-		out = append(out, *v)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].TotalMS != out[j].TotalMS {
-			return out[i].TotalMS > out[j].TotalMS
-		}
-		return out[i].Unit < out[j].Unit
-	})
-	return stats, out, orphans, selections
+	return out
 }

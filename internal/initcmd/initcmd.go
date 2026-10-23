@@ -33,6 +33,7 @@ import (
 	"github.com/undervoke/ytif/internal/gitx"
 	"github.com/undervoke/ytif/internal/inventory"
 	"github.com/undervoke/ytif/internal/launch"
+	"github.com/undervoke/ytif/internal/record"
 )
 
 const (
@@ -689,7 +690,9 @@ func hookStdin(h *yaml.Node) (bool, error) {
 	return false, nil
 }
 
-const workflowText = `name: ytif
+// workflowText runs the CI gate and publishes its records under the names the
+// board reads them by, so the two sides cannot drift apart.
+var workflowText = fmt.Sprintf(`name: ytif
 
 on:
   push:
@@ -708,14 +711,14 @@ jobs:
         with:
           go-version-file: go.mod
       - name: checks
-        run: go tool ytif ci --report github --records ytif-records.jsonl
+        run: go tool ytif ci --report github --records %[1]s
       - name: records
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: ytif-records
-          path: ytif-records.jsonl
-`
+          name: %[2]s
+          path: %[1]s
+`, record.ArtifactFile, record.ArtifactName)
 
 // workflowActions are the actions workflowText uses, with the reasons the
 // exemptions give them.

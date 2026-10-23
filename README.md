@@ -214,9 +214,32 @@ append results, timings, and selection to `<git-common-dir>/ytif/records.jsonl`;
 `ytif list` shows verifications and findings.
 
 `ytif board` writes the ledger and its records as one HTML file and opens it;
-`--out PATH` only writes it, and `--records PATH` reads the given record files,
-such as a downloaded CI artifact. A hit on the board is a run of consecutive
-fails that a pass ends.
+`--out PATH` only writes it, and `--records PATH` reads those files instead of
+the default one.
+
+On a repository whose origin is GitHub, the board also syncs the `ytif-records`
+artifacts of that repository into `<git-common-dir>/ytif/ci-cache/`. It lists
+the catalog at most every five minutes, downloads at most twenty unseen
+artifacts per build (newest first), and keeps what it downloaded, so the next
+build resumes where the last one stopped. The token comes from `GH_TOKEN`, then
+`GITHUB_TOKEN`, then `gh auth token --hostname github.com`. Without
+credentials, a network, or any artifact, the page renders the cached records
+and names on the source line why the sync stopped.
+
+A gate's time is the sum of its current members' means. <!-- dinyd: internal/board/board.go#summarize s1:824cf197241d735e -->
+Each mean uses the last N timed results of that verification at that gate. <!-- dinyd: internal/board/board.go#aggregate s1:a73be260f7500632 --> <!-- dinyd: internal/board/board.go#meansOf s1:23e869a0e30312a9 --> <!-- dinyd: internal/board/board.go#build s1:44265c6be1cd490f -->
+A fail counts as one hit; later fails of that verification at that gate count again only after a pass. <!-- dinyd: internal/record/hits.go#Hits s1:d5b7e4a02af8b181 -->
+Hits are counted over the last `days` days, with an optional latest-attempt limit per gate. <!-- dinyd: internal/board/board.go#window s1:374dbfd9604443da -->
+Only the root ledger sets the windows:
+
+```yaml
+board:
+  average: {check: 100, commit: 100, push: 100, ci: 10}
+  hits: {days: 365, last: {commit: 50}}
+```
+
+An omitted value keeps the default: 100 timed results per gate, 10 for ci, and 365 hit days. <!-- dinyd: internal/inventory/inventory.go#BoardConfig.Settings s1:93e76a905a006717 --> <!-- dinyd: internal/inventory/inventory.go#defaultAverage s1:47f8d6f4c819e8af --> <!-- dinyd: internal/inventory/inventory.go#defaultCIAverage s1:7175079900b572ce --> <!-- dinyd: internal/inventory/inventory.go#defaultHitDays s1:afc36fd3bd525bdc -->
+`hits.last` counts a gate's hits only in its latest N attempts; leave it out to count every attempt inside the days.
 
 ## Agent guard
 

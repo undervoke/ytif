@@ -40,11 +40,113 @@ const (
 // Inventory is the verification ledger: shared configuration from the root
 // file plus the merged verification list.
 type Inventory struct {
-	Version       int        `yaml:"version"`
-	Vocabulary    Vocabulary `yaml:"vocabulary,omitempty"`
-	Prepare       []Prep     `yaml:"prepare,omitempty"`
-	Includes      []string   `yaml:"includes,omitempty"`
-	Verifications []Entry    `yaml:"verifications"`
+	Version       int          `yaml:"version"`
+	Vocabulary    Vocabulary   `yaml:"vocabulary,omitempty"`
+	Prepare       []Prep       `yaml:"prepare,omitempty"`
+	Board         BoardConfig  `yaml:"board,omitempty"`
+	Includes      []string     `yaml:"includes,omitempty"`
+	Verifications []Entry      `yaml:"verifications"`
+	Files         []LedgerFile `yaml:"-"`
+}
+
+// BoardConfig sets the statistics windows the board uses. Zero values keep
+// the defaults, so a ledger states only what differs.
+type BoardConfig struct {
+	Average GateCounts `yaml:"average,omitempty"`
+	Hits    HitWindow  `yaml:"hits,omitempty"`
+}
+
+// GateCounts counts something per gate. Strict decoding rejects a misnamed
+// gate, so a typo cannot silently keep the default.
+type GateCounts struct {
+	Check  int `yaml:"check,omitempty"`
+	Commit int `yaml:"commit,omitempty"`
+	Push   int `yaml:"push,omitempty"`
+	CI     int `yaml:"ci,omitempty"`
+}
+
+// HitWindow bounds the population a hit is counted in: how many days it
+// reaches back, and per gate how many of that gate's latest attempts count.
+type HitWindow struct {
+	Days int        `yaml:"days,omitempty"`
+	Last GateCounts `yaml:"last,omitempty"`
+}
+
+// Settings are the board windows with the defaults applied.
+type Settings struct {
+	Average map[string]int // gate → timed samples the mean uses
+	HitDays int            // how far back a hit is counted
+	HitLast map[string]int // gate → latest attempts a hit is counted in
+}
+
+// Defaults for the board windows.
+const (
+	defaultAverage   = 100 // timed samples per verification and gate
+	defaultCIAverage = 10  // ci runs cost orders of magnitude more
+	defaultHitDays   = 365
+)
+
+// Settings resolves the board windows. An unset average is 100 timed samples
+// per gate and 10 for ci, an unset hit window 365 days, and an unset per-gate
+// hit limit counts every attempt.
+func (b BoardConfig) Settings() Settings {
+	s := Settings{Average: map[string]int{}, HitDays: b.Hits.Days, HitLast: map[string]int{}}
+	for gate, n := range b.Average.byGate() {
+		if n == 0 {
+			n = defaultAverage
+			if gate == check.GateCI {
+				n = defaultCIAverage
+			}
+		}
+		s.Average[gate] = n
+	}
+	if s.HitDays == 0 {
+		s.HitDays = defaultHitDays
+	}
+	for gate, n := range b.Hits.Last.byGate() {
+		if n > 0 {
+			s.HitLast[gate] = n
+		}
+	}
+	return s
+}
+
+func (g GateCounts) byGate() map[string]int {
+	return map[string]int{
+		check.GateCheck:  g.Check,
+		check.GateCommit: g.Commit,
+		check.GatePush:   g.Push,
+		check.GateCI:     g.CI,
+	}
+}
+
+// validate rejects negative windows: a count of samples or days cannot be
+// negative, and treating one as unset would hide a typo.
+func (b BoardConfig) validate() error {
+	for _, f := range []struct {
+		field string
+		g     GateCounts
+	}{{"average", b.Average}, {"hits: last", b.Hits.Last}} {
+		for _, n := range []struct {
+			gate string
+			v    int
+		}{{"check", f.g.Check}, {"commit", f.g.Commit}, {"push", f.g.Push}, {"ci", f.g.CI}} {
+			if n.v < 0 {
+				return fmt.Errorf("%s: %s %d: want 0 or more", f.field, n.gate, n.v)
+			}
+		}
+	}
+	if b.Hits.Days < 0 {
+		return fmt.Errorf("hits: days %d: want 0 or more", b.Hits.Days)
+	}
+	return nil
+}
+
+// LedgerFile is one ledger file in visit order, with the file that included
+// it. The root file names no parent. A diamond include keeps its first visit.
+type LedgerFile struct {
+	Path   string
+	Parent string
 }
 
 // Prep is a command that produces what the named runners' discovery and
@@ -80,7 +182,8 @@ type Entry struct {
 	Detection  string   `yaml:"detection,omitempty"`
 	Impact     string   `yaml:"impact,omitempty"`
 	DeleteWhen string   `yaml:"delete_when,omitempty"`
-	Origin     string   `yaml:"-"`
+	Origin     string   `yaml:"-"` // file: verifications[i], diagnostics only
+	File       string   `yaml:"-"` // file the entry was defined in
 }
 
 // Ref names another inventoried verification.
@@ -195,7 +298,7 @@ const (
 
 // fragmentFile is one included ledger fragment. Only includes and
 // verifications may appear here; strict decoding rejects the root-only
-// version, vocabulary and prepare fields.
+// version, vocabulary, prepare and board fields.
 type fragmentFile struct {
 	Includes      []string `yaml:"includes,omitempty"`
 	Verifications []Entry  `yaml:"verifications"`
@@ -246,11 +349,14 @@ func LoadInventory(root string) (Inventory, error) {
 	if err := validatePrepare(raw.Prepare, InventoryFile); err != nil {
 		return Inventory{}, err
 	}
+	if err := raw.Board.validate(); err != nil {
+		return Inventory{}, fmt.Errorf("%s: board: %w", InventoryFile, err)
+	}
 	realRoot, err := filepath.EvalSymlinks(newPath)
 	if err != nil {
 		return Inventory{}, fmt.Errorf("%s: %w", InventoryFile, err)
 	}
-	l := &fileLoader{root: root, visited: map[string]bool{realRoot: true}, seen: map[check.Key]string{}}
+	l := &fileLoader{root: root, visited: map[string]bool{realRoot: true}, seen: map[check.Key]string{}, files: []LedgerFile{{Path: InventoryFile}}}
 	if err := l.addEntries(InventoryFile, raw.Verifications); err != nil {
 		return Inventory{}, err
 	}
@@ -261,8 +367,10 @@ func LoadInventory(root string) (Inventory, error) {
 		Version:       raw.Version,
 		Vocabulary:    raw.Vocabulary,
 		Prepare:       raw.Prepare,
+		Board:         raw.Board,
 		Includes:      raw.Includes,
 		Verifications: l.out,
+		Files:         l.files,
 	}, nil
 }
 
@@ -445,11 +553,13 @@ type fileLoader struct {
 	visited map[string]bool
 	seen    map[check.Key]string
 	out     []Entry
+	files   []LedgerFile
 }
 
 func (l *fileLoader) addEntries(display string, entries []Entry) error {
 	for i := range entries {
 		entries[i].Origin = fmt.Sprintf("%s: verifications[%d]", display, i)
+		entries[i].File = display
 		k := entries[i].Key()
 		if prev, dup := l.seen[k]; dup {
 			return fmt.Errorf("duplicate verification %q: first %s, also %s", k, prev, entries[i].Origin)
@@ -488,6 +598,7 @@ func (l *fileLoader) addIncludes(declDir, declDisplay string, includes []string,
 		}
 		l.visited[real] = true
 		display := relDisplay(l.root, target)
+		l.files = append(l.files, LedgerFile{Path: display, Parent: declDisplay})
 		var frag fragmentFile
 		if err := decodeStrict(target, display, &frag); err != nil {
 			return err

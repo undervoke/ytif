@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -31,6 +32,35 @@ func CommonDir(root string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// Branch returns the checked-out branch name. A detached HEAD returns an
+// empty name, which is how CI checkouts usually arrive.
+func Branch(root string) (string, error) {
+	// symbolic-ref exits 1, printing nothing, on a detached HEAD, so the exit
+	// code has to survive to here.
+	cmd := exec.Command("git", "-C", root, "symbolic-ref", "--quiet", "--short", "HEAD")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 1 && stderr.Len() == 0 {
+			return "", nil
+		}
+		return "", fmt.Errorf("git symbolic-ref HEAD: %v: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// RemoteURL returns the URL of a named remote. A remote that is not
+// configured reads as empty, so a repository without one is not an error.
+func RemoteURL(root, name string) string {
+	out, err := git(root, nil, "remote", "get-url", name)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // Tracked lists tracked files that exist on disk as files.
@@ -177,7 +207,8 @@ func MergeBase(root, ref string) (string, error) {
 
 // Snapshot describes the revision and change context a gate run selects
 // from. Base is the merge-base of baseRef with HEAD, empty when no base was
-// requested. Head is the actual HEAD, empty when HEAD is unborn; full
+// requested. Head is the actual HEAD, empty when HEAD is unborn; Branch is
+// the checked-out branch, empty when HEAD is detached. Full
 // check/commit/ci runs work before the first commit and snapshot the dirty
 // state against the empty tree instead. Bases holds one merge-base per
 // pushed tip for the push gate. Tips holds the non-deleted pushed tips, or
@@ -190,6 +221,7 @@ func MergeBase(root, ref string) (string, error) {
 type Snapshot struct {
 	Base             string
 	Head             string
+	Branch           string
 	Bases            []string
 	Tips             []string
 	Changed          []string
@@ -240,7 +272,11 @@ func SelectionSnapshot(root, gate, baseRef string, pushRefs io.Reader) (Snapshot
 	if err != nil {
 		return Snapshot{}, err
 	}
-	snap := Snapshot{Head: head, DirtyDigest: digest, MergeParents: parents}
+	branch, err := Branch(root)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	snap := Snapshot{Head: head, Branch: branch, DirtyDigest: digest, MergeParents: parents}
 	if baseRef == "" {
 		if gate == "push" {
 			tips, err := pushTips(root, pushRefs, head)

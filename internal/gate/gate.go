@@ -87,6 +87,7 @@ func Run(ctx context.Context, root string, o Options) int {
 	selection := record.Selection{
 		RequestedMode:    mode,
 		EffectiveMode:    mode,
+		Branch:           snapshot.Branch,
 		Base:             snapshot.Base,
 		Head:             snapshot.Head,
 		Bases:            snapshot.Bases,

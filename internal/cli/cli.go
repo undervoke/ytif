@@ -15,6 +15,7 @@ import (
 	"github.com/undervoke/ytif/internal/allow"
 	"github.com/undervoke/ytif/internal/board"
 	"github.com/undervoke/ytif/internal/check"
+	"github.com/undervoke/ytif/internal/cirecords"
 	"github.com/undervoke/ytif/internal/gate"
 	"github.com/undervoke/ytif/internal/gitx"
 	"github.com/undervoke/ytif/internal/guard"
@@ -186,7 +187,21 @@ func runBoard(args []string, stdout, stderr io.Writer) int {
 	if malformed > 0 {
 		fmt.Fprintf(stderr, "ytif: skipped %d malformed record lines\n", malformed)
 	}
-	html, err := board.Render(board.Assets, root, lines, time.Now())
+	now := time.Now()
+	src := board.Sources{Local: lines}
+	if _, ok := cirecords.Origin(root); ok {
+		client := cirecords.Client{Token: cirecords.Token()}
+		result, err := client.Sync(root, common, now)
+		if err != nil {
+			fmt.Fprintf(stderr, "ytif: CI records: %v; showing cached records\n", err)
+		}
+		src.Remote, src.RemoteBranch, src.Status = result.Lines, result.Branch, &result.Status
+	}
+	if src.Branch, err = gitx.Branch(root); err != nil {
+		fmt.Fprintf(stderr, "ytif: %v\n", err)
+		return gate.ExitUsage
+	}
+	html, err := board.Render(board.Assets, root, src, now)
 	if err != nil {
 		fmt.Fprintf(stderr, "ytif: %v\n", err)
 		return gate.ExitUsage

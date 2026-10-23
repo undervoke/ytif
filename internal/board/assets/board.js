@@ -1,46 +1,72 @@
 "use strict";
 // ytif board: hash-routed pages over one embedded data document.
-//   #/verifications?tags=a,b&gates=check,commit   verification list (tag + gate filters)
+//   #/verifications?tags=a,b&gates=check,commit&q=&runner=&hit=&time=&state=&file=&group=&view=
+//                                                verifications and process time
 //   #/verification/<key>                         relation diagram around one verification
-//   #/cost                                       cost, hits, and run selection context
 //   #/vocabulary                                 built-in and project vocabulary
-// Legacy hashes #/checks and #/check/<key> route to the same pages.
+// Legacy hashes #/checks, #/check/<key>, and #/cost route to the same pages.
+// The runner param names the runner filter in the verification view and the
+// selected runner or unit in the process view.
 
 const D = JSON.parse(document.getElementById("data").textContent);
+const META = D.meta || {};
+const CRITERIA = META.criteria || { average: {}, hits: { days: 365 } };
 
 // ---- text ----
 const T = {
   en: {
-    tabVerifications: "Verifications", tabDiagram: "Diagram", tabCost: "Cost & hits", tabVocab: "Vocabulary", langName: "English", language: "Language",
+    tabVerifications: "Verifications", tabDiagram: "Diagram", tabVocab: "Vocabulary", langName: "English", language: "Language",
     theme: "Theme", themes: { system: "System", light: "Light", dark: "Dark" },
     meta: (r, v, g) => `${r} · verifications v${v} · generated ${g}`,
-    filters: "Filters", clearAll: "Clear all", filterHelp: "A verification stays when it matches any chosen tag in a group, in every group, and any chosen gate.",
-    gatesFilter: "Gates", searchList: "Find by impact, verification name, command, or unit", sort: "Sort", sortInv: "Inventory order", sortUnit: "By unit", sortCost: "Highest cost",
-    count: (n, t) => `<b>${n}</b> of ${t}`, colImpact: "Impact · verification", colTags: "Tags", colGate: "Gates",
-    more: (k, r) => `${k} more · ${r} left`, noMatch: "No verification matches.",
-    searchVerification: "Find a verification: impact, name, command, unit", matchCount: (m, n) => `${m} of ${n} match`, firstShown: l => ` · first ${l} shown`,
-    recent: "Recent", runsAt: g => `member of ${g}`, accident: "Accident", detection: "Detection", deleteWhen: "Delete when", location: "Location",
-    command: "Command", run: "Run", cwd: "Directory", exclusive: "Exclusive", origin: "Defined in",
-    relations: "Direct relations", requires: "Requires", ensures: "Ensures", requiredBy: "Required by", ensuredBy: "Ensured by",
-    closest: "Closest verifications", byScore: "by score", tags: "Tags", component: "Component", unit: "unit",
-    show: n => `Show · ${n} sharing`, hide: "Hide", moreLeft: (k, r) => `${k} more (${r} left)`, noPeers: "No other verification shares this.",
-    noVerification: "No verification has this key.", noVerifications: "The ledger has no verifications.",
-    omitted: "omitted", omittedReason: r => `omitted · ${r}`, skipPush: "skip-push",
+    title: "Verifications",
+    srcLocal: (f, t, n) => `local · ${f} – ${t} · ${n} runs`, srcLocalEmpty: "local · no records",
+    srcCI: (repo, range, n) => `CI · ${repo}${range ? ` · ${range}` : ""}${n ? ` · ${n} runs` : ""}`,
+    srcSynced: t => `synced ${t}`, srcPending: n => `${n} pending`,
+    srcOffline: "sync failed: offline", srcNoCredentials: "sync failed: no credentials", srcNoArtifact: "no artifact",
+    gateTitle: "Verification time per gate", avg: "Average", branch: "Branch", noBranch: "(no branch)", noItem: "(no item)",
+    criteriaAvg: "Average", criteriaAvgText: "Mean of the last N timed results per verification and gate, and per process and gate.",
+    criteriaBranch: "Branch", criteriaBranchText: "Each gate's latest run on the current branch: the sum of its timed results.",
+    criteriaHit: "Hit", criteriaHitText: "A fail counts once; fails until the next pass do not count.",
+    criteriaHitCI: "ci counts the received CI records.", criteriaHitLast: (g, n) => `${g} counts its latest ${n} runs`,
+    viewVerif: "Verifications", viewProcess: "Process time",
+    filesTitle: "Ledger files", filesFind: "Find a path", procAll: "All", procTitle: "Runner · unit", shared: "Shared", procFind: "Find a runner or unit", files: n => `${n} ledger files`,
+    sort: "Sort", sortAvg: "Largest average sum", sortInv: "Inventory order", sortHits: "Most hits", sortGate: g => `Largest ${g} average`,
+    grouping: "Grouping", groupVerification: "Individual verification", groupUnit: "Execution unit",
+    countAll: n => `Verifications ${n}`, countMatch: n => `matching ${n}`, countProc: n => `Processes ${n}`,
+    filters: "Filters", applied: "Applied", clearAll: "Clear all", remove: l => `Remove ${l}`,
+    searchList: "Find by impact, accident, detection, verification name, command, or unit",
+    gates: "Gates", hitGroup: "Hit", hitYes: "yes", hitNo: "no",
+    avgGroup: "Average sum", atLeast: v => `≥ ${v}`,
+    stateGroup: "State", stateNoSample: "no time samples", stateBranch: "ran on this branch", stateFail: "failed in the last 30 days",
     membershipNote: "Every verification belongs to CI and, unless skip-push, to push. check and commit are independent opt-ins.",
-    costTitle: "Cost and hits per verification", noRecords: "No records yet. Gates append them as they run.",
-    source: (f, t, n, parts) => `records · ${f} – ${t} · ${n} gate runs (${parts})`,
-    gateTotal: g => `${g} gate verification time`, hitsTotal: n => `Hits (${n} inventoried verifications)`, unrecorded: "Verifications without records",
-    verificationsHead: "Verifications", sortTotal: "Largest total", sortHits: "Most hits", sortAvg: "Largest average", sortRuns: "Fewest runs",
-    colRuns: "Runs", colHits: "Hits", colTotal: "Total", colAvg: "Average",
-    costNote: "A hit counts consecutive fails that a pass ends as one. Times are each verification's own run time from history, not present-day membership; builds and processes are in the unit table. An omission is neither a pass nor a zero-duration run.",
-    units: "Unit build and process time", times: n => `${n}×`, orphans: "Records of verifications not in the ledger",
-    orphanNote: "Verifications since deleted or renamed: what they caught before they left.", lastFail: (t, g) => `last fail ${t} · ${g}`,
-    runsTitle: "Run selection context", runsEmpty: "No selection records yet. Older records predate selection tracking and show mode unknown.",
-    colWhen: "Run", colMode: "Mode", colScope: "Scope", colSelected: "Selected", colOmit: "Omitted",
-    modeFull: "full", modeAffected: "affected", modeUnknown: "mode unknown", runIncomplete: "incomplete", runFailed: "gate failed",
-    affectedZero: "affected selection chose nothing", emptyRegistry: "ledger registered nothing",
-    fallback: f => `fallback · ${f}`, revisionMismatch: "working tree differed from the recorded tip",
-    registered: (r, s) => `${s} of ${r} selected`,
+    colImpact: "Impact · verification", colUnit: "Execution unit", colWhat: "Task · runner · unit", colAvg: "Average sum",
+    more: (k, r) => `${k} more · ${r} left`,
+    noMatch: "No verification matches.", noVerifications: "The ledger has no verifications.",
+    noProcesses: "No process matches.", noRecords: "No records yet. Gates append them as they run.",
+    tags: "Tags", openDiagram: "Open in diagram →",
+    unitKey: (runner, n) => `${runner} · ${n} verifications`,
+    run: "Run", cwd: "Directory", exclusive: "Exclusive", origin: "Defined in",
+    location: "Location",
+    railLabel: "Verification list", railOpen: "Open the list", railClose: "Collapse the list",
+    railFilter: "Filter", railGroup: "Grouping", railByFile: "By file", railByRunner: "By command",
+    railSearch: "Filter by name, execution unit, or wording", railEmpty: "Nothing matches the filter.",
+    railCount: (a, s) => `${s} of ${a}`, noTimeSamples: "No time samples", clearTags: "Clear tags",
+    viewLabel: "View",
+    relations: "Direct relations", requires: "Requires", ensures: "Ensures", requiredBy: "Required by", ensuredBy: "Ensured by",
+    component: "Component", unit: "unit",
+    show: n => `Show · ${n} sharing`, hide: "Hide", moreLeft: (k, r) => `${k} more (${r} left)`, noPeers: "No other verification shares this.",
+    noVerification: "No verification has this key.", omittedReason: r => `omitted · ${r}`,
+    diagramDetection: "How", diagramImpact: "Worst case", diagramAccident: "What", diagramDelete: "Removal condition",
+    diagramCommand: "Command it runs", diagramVerification: "Verification", diagramShowAll: "Show all", diagramCollapse: "Collapse", diagramUnit: "Execution unit",
+    diagramCost: "Cost", diagramBasis: "Record criteria", diagramLocal: "Local records", diagramUnsynced: "not synced yet",
+    diagramSamples: n => `${n} timed samples`, diagramNoSample: "No timed samples", diagramNotMember: "Not in this gate",
+    diagramCostHint: "Mean (hit) · Hover a cell for its timed sample count", diagramProcess: "View in process time →",
+    diagramFileHint: "Select the file to list its verifications and those in its included files",
+    diagramTagHint: "Open verifications filtered by this tag", diagramPeerMeta: (sum, hits) => `Average sum ${sum} · hit ${hits}`,
+    diagramBranchHint: "Has results from a run on the current branch", diagramFailHint: "Failed within the last 30 days across all branches. This does not mean it is still failing.",
+    diagramNoSampleHint: "No timed results in its current member gates",
+    diagramRequiresHint: "Verifications this verification depends on", diagramRequiredByHint: "Verifications that depend on this verification",
+    diagramEnsuresHint: "Verifications this verification keeps working", diagramEnsuredByHint: "Verifications that keep this verification working",
     vocabTitle: "Vocabulary",
     vocabLede: "A tag name is unique across groups, so a tag alone names its group. Every project shares the ytif built-in vocabulary; a project declares its own groups under vocabulary at the top of ytif-verifications.yaml. Select a count to list those verifications.",
     colGroup: "Group", colRule: "Per verification", colTag: "Tag", colLabel: "Label", colOwner: "Owner", colUses: "Uses",
@@ -48,36 +74,58 @@ const T = {
     when: "When", whenSub: "Member of", whenText: "Not a tag: gate membership (check and commit are opt-ins; every verification belongs to CI and, unless skip-push, to push).",
   },
   ko: {
-    tabVerifications: "검증", tabDiagram: "다이어그램", tabCost: "비용·hit", tabVocab: "어휘표", langName: "한국어", language: "언어",
+    tabVerifications: "검증", tabDiagram: "다이어그램", tabVocab: "어휘표", langName: "한국어", language: "언어",
     theme: "테마", themes: { system: "시스템", light: "라이트", dark: "다크" },
     meta: (r, v, g) => `${r} · verifications v${v} · 생성 ${g}`,
-    filters: "필터", clearAll: "모두 해제", filterHelp: "같은 묶음 안에서는 하나라도, 묶음끼리는 모두 맞고, 고른 gate 중 하나에는 속해야 남습니다.",
-    gatesFilter: "gate", searchList: "impact, 검증 이름, 명령, unit으로 찾기", sort: "정렬", sortInv: "인벤토리 순", sortUnit: "unit 순", sortCost: "비용 큰 순",
-    count: (n, t) => `<b>${n}</b>개 / ${t}`, colImpact: "impact · 검증", colTags: "태그", colGate: "gate",
-    more: (k, r) => `${k}개 더 보기 · ${r}개 남음`, noMatch: "맞는 검증이 없습니다.",
-    searchVerification: "검증 찾기: impact, 이름, 명령, unit", matchCount: (m, n) => `${n}개 중 ${m}개 일치`, firstShown: l => ` · 앞의 ${l}개만 표시`,
-    recent: "최근 본 검증", runsAt: g => `${g}에 속함`, accident: "사고", detection: "탐지", deleteWhen: "삭제 조건", location: "위치",
-    command: "명령", run: "실행", cwd: "디렉터리", exclusive: "exclusive", origin: "정의 위치",
-    relations: "직접 관계", requires: "선행 조건", ensures: "보장 대상", requiredBy: "이 검증을 필요로 함", ensuredBy: "이 검증을 보장함",
-    closest: "가장 가까운 검증", byScore: "점수 순", tags: "태그", component: "컴포넌트", unit: "unit",
-    show: n => `펼치기 · 같은 검증 ${n}개`, hide: "접기", moreLeft: (k, r) => `${k}개 더 보기 (${r}개 남음)`, noPeers: "이 값을 가진 다른 검증이 없습니다.",
-    noVerification: "이 key의 검증이 없습니다.", noVerifications: "ledger에 검증이 없습니다.",
-    omitted: "제외", omittedReason: r => `제외 · ${r}`, skipPush: "skip-push",
+    title: "검증",
+    srcLocal: (f, t, n) => `local · ${f} – ${t} · ${n}회`, srcLocalEmpty: "local · 기록 없음",
+    srcCI: (repo, range, n) => `CI · ${repo}${range ? ` · ${range}` : ""}${n ? ` · ${n}회` : ""}`,
+    srcSynced: t => `동기화 ${t}`, srcPending: n => `대기 ${n}`,
+    srcOffline: "동기화 실패: 오프라인", srcNoCredentials: "동기화 실패: credentials 없음", srcNoArtifact: "artifact 없음",
+    gateTitle: "gate별 검증 시간 합", avg: "평균", branch: "branch 기준", noBranch: "(branch 없음)", noItem: "(항목 없음)",
+    criteriaAvg: "평균", criteriaAvgText: "검증×gate별, 프로세스×gate별 시간이 기록된 최근 N회 평균",
+    criteriaBranch: "branch 기준", criteriaBranchText: "현재 branch에서 gate별 마지막 실행 1회의 검증 시간 합",
+    criteriaHit: "hit", criteriaHitText: "fail을 1회로 세고, 다음 pass까지의 fail은 세지 않음",
+    criteriaHitCI: "ci는 받은 CI 기록 기준", criteriaHitLast: (g, n) => `${g}은 최근 ${n}회 실행 기준`,
+    viewVerif: "검증", viewProcess: "프로세스 시간",
+    filesTitle: "ledger 파일", filesFind: "경로 찾기", procAll: "전체", procTitle: "runner · 실행 단위", shared: "공용", procFind: "runner·실행 단위 찾기", files: n => `${n}개`,
+    sort: "정렬", sortAvg: "평균 합 큰 순", sortInv: "인벤토리 순", sortHits: "hit 많은 순", sortGate: g => `${g} 평균 큰 순`,
+    grouping: "묶음", groupVerification: "개별 검증", groupUnit: "실행 단위",
+    countAll: n => `검증 ${n}`, countMatch: n => `조건에 맞는 검증 ${n}`, countProc: n => `프로세스 ${n}`,
+    filters: "필터", applied: "적용", clearAll: "모두 해제", remove: l => `${l} 해제`,
+    searchList: "영향, 사고, 탐지, 검증 이름, 명령, 실행 단위로 찾기",
+    gates: "gate", hitGroup: "hit", hitYes: "있음", hitNo: "없음",
+    avgGroup: "평균 합", atLeast: v => `${v} 이상`,
+    stateGroup: "상태", stateNoSample: "시간 표본 없음", stateBranch: "이 branch에서 실행됨", stateFail: "최근 30일 fail",
     membershipNote: "모든 검증은 CI에 속하고, skip-push가 아니면 push에도 속합니다. check와 commit은 각각 지정합니다.",
-    costTitle: "검증별 비용과 hit", noRecords: "아직 기록이 없습니다. gate가 실행될 때마다 쌓입니다.",
-    source: (f, t, n, parts) => `records · ${f} – ${t} · gate 실행 ${n}회 (${parts})`,
-    gateTotal: g => `${g} gate 검증 시간 합`, hitsTotal: n => `hit (ledger 검증 ${n}개)`, unrecorded: "기록이 없는 검증",
-    verificationsHead: "검증", sortTotal: "총 시간 큰 순", sortHits: "hit 많은 순", sortAvg: "평균 시간 큰 순", sortRuns: "실행 수 적은 순",
-    colRuns: "실행", colHits: "hit", colTotal: "총 시간", colAvg: "평균",
-    costNote: "hit는 pass로 끊기는 연속 fail을 1회로 셉니다. 시간은 기록에 남은 검증 자신의 실행 시간이며 현재 소속이 아닙니다. 제외는 pass도 0초 실행도 아닙니다.",
-    units: "unit 빌드·프로세스 시간", times: n => `${n}회`, orphans: "ledger에 없는 검증의 기록",
-    orphanNote: "지우거나 이름을 바꾼 검증의 기록입니다. 떠나기 전 무엇을 잡았는지 보여 줍니다.", lastFail: (t, g) => `마지막 fail ${t} · ${g}`,
-    runsTitle: "실행 선택 기록", runsEmpty: "선택 기록이 없습니다. 이전 기록은 선택 추적 이전이라 모드를 알 수 없습니다.",
-    colWhen: "실행", colMode: "모드", colScope: "범위", colSelected: "선택", colOmit: "제외",
-    modeFull: "full", modeAffected: "affected", modeUnknown: "모드 미상", runIncomplete: "미완료", runFailed: "gate 실패",
-    affectedZero: "affected 선택 결과 없음", emptyRegistry: "ledger 등록 없음",
-    fallback: f => `fallback · ${f}`, revisionMismatch: "작업트리가 기록된 tip과 달랐음",
-    registered: (r, s) => `${r}개 중 ${s}개 선택`,
+    colImpact: "영향 · 검증", colUnit: "실행 단위", colWhat: "작업 · runner · 실행 단위", colAvg: "평균 합",
+    more: (k, r) => `${k}개 더 보기 · ${r}개 남음`,
+    noMatch: "조건에 맞는 검증이 없습니다.", noVerifications: "ledger에 검증이 없습니다.",
+    noProcesses: "조건에 맞는 프로세스가 없습니다.", noRecords: "아직 기록이 없습니다. gate가 실행될 때마다 쌓입니다.",
+    tags: "태그", openDiagram: "다이어그램에서 보기 →",
+    unitKey: (runner, n) => `${runner} · 검증 ${n}`,
+    run: "실행", cwd: "디렉터리", exclusive: "exclusive", origin: "정의 위치",
+    location: "위치",
+    railLabel: "검증 목록", railOpen: "목록 펼치기", railClose: "목록 접기",
+    railFilter: "필터", railGroup: "묶음", railByFile: "파일 별", railByRunner: "실행 명령 별",
+    railSearch: "이름, 실행 단위, 문구로 거르기", railEmpty: "거른 결과가 없습니다.",
+    railCount: (a, s) => `${a}개 중 ${s}개`, noTimeSamples: "시간 표본 없음", clearTags: "태그 모두 해제",
+    viewLabel: "보기",
+    relations: "직접 관계", requires: "선행 조건", ensures: "보장 대상", requiredBy: "이 검증을 필요로 함", ensuredBy: "이 검증을 보장함",
+    component: "컴포넌트", unit: "unit",
+    show: n => `펼치기 · 같은 검증 ${n}개`, hide: "접기", moreLeft: (k, r) => `${k}개 더 보기 (${r}개 남음)`, noPeers: "이 값을 가진 다른 검증이 없습니다.",
+    noVerification: "이 key의 검증이 없습니다.", omittedReason: r => `제외 · ${r}`,
+    diagramDetection: "어떻게", diagramImpact: "최악의 경우", diagramAccident: "무엇을", diagramDelete: "제거 조건",
+    diagramCommand: "실행하는 명령", diagramVerification: "검증", diagramShowAll: "전체 보기", diagramCollapse: "접기", diagramUnit: "실행 단위",
+    diagramCost: "비용", diagramBasis: "기록 기준", diagramLocal: "로컬 기록", diagramUnsynced: "아직 동기화하지 않음",
+    diagramSamples: n => `시간 표본 ${n}회`, diagramNoSample: "시간 표본 없음", diagramNotMember: "이 gate 소속 아님",
+    diagramCostHint: "평균 (hit) · 칸에 올리면 시간 표본 수", diagramProcess: "프로세스 시간에서 보기 →",
+    diagramFileHint: "파일을 누르면 이 파일과 하위 파일의 검증 목록",
+    diagramTagHint: "이 태그로 걸러진 검증 목록으로", diagramPeerMeta: (sum, hits) => `평균 합 ${sum} · hit ${hits}`,
+    diagramBranchHint: "현재 branch의 실행에 결과가 있음", diagramFailHint: "모든 branch의 기록에서 최근 30일 안에 fail이 있음. 지금도 실패 중이라는 뜻은 아님",
+    diagramNoSampleHint: "지금 소속된 gate에 시간이 기록된 결과가 없음",
+    diagramRequiresHint: "이 검증이 의존하는 검증", diagramRequiredByHint: "이 검증에 의존하는 검증",
+    diagramEnsuresHint: "이 검증이 계속 동작하도록 지켜 주는 검증", diagramEnsuredByHint: "이 검증을 지켜 주는 검증",
     vocabTitle: "어휘표",
     vocabLede: "태그 이름은 묶음이 달라도 겹치지 않아서, 태그 하나로 묶음이 정해집니다. ytif 내장 어휘는 모든 프로젝트가 같이 쓰고, 프로젝트 어휘는 ytif-verifications.yaml 맨 위 vocabulary에 선언합니다. 사용 수를 누르면 그 태그로 걸러진 검증 목록으로 갑니다.",
     colGroup: "묶음", colRule: "검증마다", colTag: "태그", colLabel: "표시", colOwner: "소유", colUses: "사용 수",
@@ -106,19 +154,26 @@ const ms = v => {
   return `${s.toLocaleString(lang, { maximumFractionDigits: s < 10 ? 2 : s < 100 ? 1 : 0 })}s`;
 };
 const when = iso => { try { return new Intl.DateTimeFormat(lang, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(iso)) } catch { return String(iso ?? "") } };
+const day = iso => { const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}` };
 const shares = (a, b) => a.some(v => b.includes(v));
 const href = key => "#/verification/" + encodeURIComponent(key);
 const GATES = ["check", "commit", "push", "ci"];
+const AND = new Set(["time", "state"]); // these groups need every chosen condition, others need any
+const gateColor = g => ({ check: "var(--accent)", commit: "var(--accent-2)", push: "var(--muted)", ci: "var(--warn-fg)" }[g] || "var(--muted)");
+const splitParam = s => String(s || "").split(",").filter(Boolean);
 
 // ---- model ----
 const GROUPS = D.groups || [];
 const TAG = {}; // tag → {group, label, owner}
 for (const g of GROUPS) for (const tg of (g.tags || [])) TAG[tg.name] = { group: g.name, label: tg.label, owner: g.owner };
 const groupTitle = g => g.owner === "ytif" ? (g.heading || g.name) : g.name;
+// a filter row and a tag badge name the group the way a reader asks it
+const groupLabel = g => g.owner === "ytif" ? (labelOf(g.label) || g.name) : g.name;
 const groupSub = g => g.owner === "ytif" ? labelOf(g.label) : "";
 const tagText = name => TAG[name] ? labelOf(TAG[name].label) : name;
 
 const VERIFICATIONS = D.verifications || [];
+const RUNNERS = [...new Set(VERIFICATIONS.map(c => c.runner).filter(Boolean))].sort();
 const gatesOf = c => Array.isArray(c.gates) ? c.gates : [];
 const BY_KEY = new Map(VERIFICATIONS.map((c, i) => [c.key, i]));
 const componentOf = unit => String(unit || "").split("/").slice(0, 2).join("/") || ".";
@@ -138,25 +193,87 @@ for (const c of VERIFICATIONS) {
   for (const k of (c.requires || [])) (REQUIRED_BY.get(k) || REQUIRED_BY.set(k, []).get(k)).push(c.id);
   for (const k of (c.ensures || [])) (ENSURED_BY.get(k) || ENSURED_BY.set(k, []).get(k)).push(c.id);
 }
-const DERIVED = [{ key: "component", weight: 1 }, { key: "unit", weight: 3 }];
-const INDEX = new Map(); // "facet:value" → ids
+const DERIVED = ["component", "unit"];
+const INDEX = new Map(); // "facet:value" → ids in inventory order
 const indexAdd = (k, id) => (INDEX.get(k) || INDEX.set(k, []).get(k)).push(id);
 for (const c of VERIFICATIONS) {
   for (const tg of c.tags) indexAdd("tag:" + tg, c.id);
-  for (const f of DERIVED) indexAdd(f.key + ":" + c.f[f.key][0], c.id);
+  for (const f of DERIVED) indexAdd(f + ":" + c.f[f][0], c.id);
 }
 const uses = tg => (INDEX.get("tag:" + tg) || []).length;
 
-// selection context: recorded mode, fallback, revision, and omissions.
-// An omission is distinct from a pass or a zero-duration result.
-const SELECTIONS = D.selections || [];
-const OMISSIONS = new Map(); // key → [{reason, gate, time}]
-for (const s of SELECTIONS) {
-  for (const o of (s.omissions || [])) {
-    if (!OMISSIONS.has(o.key)) OMISSIONS.set(o.key, []);
-    OMISSIONS.get(o.key).push({ reason: o.reason, gate: s.gate, time: s.time });
-  }
+// each figure is a gate's mean over its window; the sum and the hits are what a row shows
+const sumOf = r => GATES.reduce((s, g) => s + (r.means?.[g]?.ms || 0), 0);
+const hitsOf = r => GATES.reduce((s, g) => s + (r.hits?.[g] || 0), 0);
+// a sum of 0ms is a measurement; only a row with no sample has none
+const sampled = r => GATES.some(g => r.means?.[g]);
+
+// ledger files: the tree the page lists verifications by
+const FILES = D.files || [];
+const DEFAULT_FILE = "ytif-verifications.yaml";
+const FILE_BY = new Map(FILES.map(f => [f.path, f]));
+const FILE_KIDS = new Map();
+const ROOT_FILE = (FILES.find(f => !f.parent) || {}).path || "";
+for (const f of FILES) {
+  if (!f.parent) continue;
+  if (!FILE_KIDS.has(f.parent)) FILE_KIDS.set(f.parent, []);
+  FILE_KIDS.get(f.parent).push(f.path);
 }
+// a label is the path below the including file's directory, without the default file name
+function fileLabel(path, parent) {
+  let rel = path;
+  const dir = parent ? parent.split("/").slice(0, -1).join("/") : "";
+  if (dir && rel.startsWith(dir + "/")) rel = rel.slice(dir.length + 1);
+  if (rel !== DEFAULT_FILE && rel.endsWith("/" + DEFAULT_FILE)) rel = rel.slice(0, -(DEFAULT_FILE.length + 1));
+  return rel;
+}
+const FILE_COUNT = new Map(); // path → verifications in it and its descendants
+const FILE_SCOPE = new Map(); // path → its own path and every descendant's
+function walkFiles(path) {
+  const scope = [path];
+  let count = VERIFICATIONS.filter(c => c.file === path).length;
+  for (const kid of FILE_KIDS.get(path) || []) {
+    walkFiles(kid);
+    scope.push(...FILE_SCOPE.get(kid));
+    count += FILE_COUNT.get(kid);
+  }
+  FILE_SCOPE.set(path, scope);
+  FILE_COUNT.set(path, count);
+}
+if (ROOT_FILE) walkFiles(ROOT_FILE);
+const filesOf = path => FILE_SCOPE.get(path) || FILES.map(f => f.path);
+
+// process time: one row per runner, task, and unit
+const PROCS = (D.processes || []).map((p, i) => ({ ...p, id: i }));
+const isShared = p => p.what === "prepare" || p.what === "affected";
+const PROC_NODES = (() => {
+  const nodes = [{ kind: "all", id: "all", ids: PROCS.map(p => p.id) }];
+  const shared = [], byRunner = new Map();
+  for (const p of PROCS) {
+    if (isShared(p)) { shared.push(p); continue }
+    if (!byRunner.has(p.runner)) byRunner.set(p.runner, new Map());
+    const units = byRunner.get(p.runner);
+    if (!units.has(p.unit)) units.set(p.unit, []);
+    units.get(p.unit).push(p);
+  }
+  const byText = (a, b) => String(a).localeCompare(String(b));
+  for (const [runner, units] of [...byRunner].sort((a, b) => byText(a[0], b[0]))) {
+    nodes.push({ kind: "runner", id: "runner:" + runner, runner, ids: [...units.values()].flat().map(p => p.id) });
+    for (const [unit, ps] of [...units].sort((a, b) => byText(a[0], b[0])))
+      nodes.push({ kind: "unit", id: "unit:" + runner + ":" + unit, runner, unit, ids: ps.map(p => p.id) });
+  }
+  if (shared.length) {
+    nodes.push({ kind: "shared", ids: shared.map(p => p.id) });
+    for (const p of shared) nodes.push({ kind: "proc", id: "proc:" + p.id, runner: p.runner, unit: p.unit, what: p.what, ids: [p.id] });
+  }
+  return nodes;
+})();
+const procNodeLabel = n => n.kind === "all" ? t("procAll") : n.kind === "shared" ? t("shared") : n.kind === "runner" ? n.runner : (n.unit || n.what);
+const nodeOf = id => PROC_NODES.find(n => n.id === id) || PROC_NODES[0];
+
+// selection context: recorded mode, fallback, revision, and omissions
+const OMISSIONS = new Map(); // key → latest omission
+for (const o of (D.omissions || [])) OMISSIONS.set(o.key, [o]);
 const omissionsOf = key => OMISSIONS.get(key) || [];
 
 const HARM = { "code-execution": "X", "permission-bypass": "P", exposure: "K", "data-loss": "L", misdirection: "W", outage: "B" };
@@ -168,15 +285,21 @@ function chips(c) {
   return `<span class="chips">${knownTags(c).map(tg =>
     `<span class="chip${tg === harm ? " harm" : ""}${WARN.has(tg) ? " warn" : ""}"${tg === harm ? ` style="background:${hc(c)}"` : ""} title="${esc(tg)}">${esc(tagText(tg))}</span>`).join("")}</span>`;
 }
+// the expanded row groups its badges by tag group, the first harm tag in its own color
+function tagRows(c) {
+  const harm = (c.f.what || [])[0];
+  return GROUPS.flatMap(g => {
+    const names = c.f[g.name] || [];
+    if (!names.length) return [];
+    return [`<div class="tagrow"><span>${esc(groupLabel(g))}</span><span class="chips">${names.map(tg =>
+      `<span class="chip${tg === harm ? " harm" : ""}${WARN.has(tg) ? " warn" : ""}"${tg === harm ? ` style="background:${hc(c)}"` : ""}>${esc(tagText(tg))}</span>`).join("")}</span></div>`];
+  }).join("");
+}
 function gateBadges(c) {
   const gates = new Set(gatesOf(c));
   return `<span class="gates">${GATES.map(g =>
-    `<span class="gbadge${gates.has(g) ? " on" : ""}" title="${esc(g)}">${esc(g)}</span>`).join("")}${c.skip_push ? `<span class="gbadge skip" title="skip-push">skip-push</span>` : ""}${c.is_command ? `<span class="gbadge cmd" title="command">cmd</span>` : ""}</span>`;
+    `<span class="gbadge${gates.has(g) ? " on" : ""}" title="${esc(g)}">${esc(g)}</span>`).join("")}${c.skip_push ? `<span class="gbadge skip" title="skip-push">skip-push</span>` : ""}</span>`;
 }
-const scoreOf = (c, o) => c.tags.filter(tg => o.tags.includes(tg)).length +
-  DERIVED.reduce((s, f) => s + (c.f[f.key][0] === o.f[f.key][0] ? f.weight : 0), 0);
-const rankPeers = (c, ids) => ids.filter(id => id !== c.id).map(id => ({ o: VERIFICATIONS[id], score: scoreOf(c, VERIFICATIONS[id]) }))
-  .sort((a, b) => b.score - a.score || a.o.id - b.o.id);
 
 // ---- routing ----
 function route() {
@@ -186,9 +309,8 @@ function route() {
   if (path.startsWith("/verification/")) return { page: "diagram", key: decodeURIComponent(path.slice(14)), params };
   if (path.startsWith("/check/")) return { page: "diagram", key: decodeURIComponent(path.slice(7)), params };
   if (path === "/verification" || path === "/check") return { page: "diagram", key: null, params };
-  if (path === "/cost") return { page: "cost", params };
   if (path === "/vocabulary") return { page: "vocabulary", params };
-  return { page: "verifications", params };
+  return { page: "verifications", params }; // #/checks and #/cost land here too
 }
 const setHash = h => { try { history.replaceState(null, "", h) } catch { location.hash = h } };
 
@@ -198,12 +320,11 @@ function header(r) {
   const tabs = [
     ["verifications", "#/verifications", t("tabVerifications"), VERIFICATIONS.length],
     ["diagram", last && BY_KEY.has(last) ? href(last) : "#/verification", t("tabDiagram"), null],
-    ["cost", "#/cost", t("tabCost"), null],
     ["vocabulary", "#/vocabulary", t("tabVocab"), tags],
   ];
   $("#tabs").innerHTML = tabs.map(([p, h, label, n]) =>
     `<a href="${h}"${r.page === p ? ` aria-current="page"` : ""}>${esc(label)}${n == null ? "" : ` <span class="count num">${fmt(n)}</span>`}</a>`).join("");
-  $("#meta").textContent = t("meta", D.meta.repo, D.meta.version, when(D.meta.generated));
+  $("#meta").textContent = t("meta", META.repo, META.version, when(META.generated));
   const themeText = `${t("theme")}: ${t("themes")[theme]}`;
   $("#theme").setAttribute("aria-label", themeText);
   $("#theme").title = themeText;
@@ -256,218 +377,750 @@ $("#langmenu").addEventListener("keydown", e => {
 });
 
 // ---- verifications page ----
-const list = { q: "", sort: store.get("sort", "inventory"), shown: 50 };
-function filtersFrom(params) {
-  const chosen = (params.get("tags") || "").split(",").filter(tg => TAG[tg]);
-  const tags = Object.fromEntries(GROUPS.map(g => [g.name, chosen.filter(tg => TAG[tg].group === g.name)]));
-  const gates = (params.get("gates") || "").split(",").filter(g => GATES.includes(g));
-  return { tags, gates };
+// The page keeps its view in the URL: filters, grouping, the selected file, and
+// the search write back through replaceState, so a reload or a shared link
+// shows the same list. The expanded row is page state only.
+const list = { q: "", shown: 50, filterOpen: false, fileFind: "", procFind: "", expanded: undefined };
+const opened = new Set(); // expanded ledger files: the root and the selection's ancestors start open
+const TICKS = [{ at: "0%", label: "10ms" }, { at: "20%", label: "100ms" }, { at: "40%", label: "1s" }, { at: "60%", label: "10s" }, { at: "80%", label: "100s" }, { at: "100%", label: "1,000s" }];
+let vp = null; // the state of the verifications page currently on screen: { st, f, draw }
+
+// filterGroups describes every filter row: its key, its label, and one entry
+// per chip with the value, the label, and the test.
+function filterGroups() {
+  return [
+    { key: "hit", label: t("hitGroup"), opts: [["yes", t("hitYes"), c => hitsOf(c) > 0], ["no", t("hitNo"), c => hitsOf(c) === 0]] },
+    { key: "gate", label: t("gates"), opts: GATES.map(g => [g, g, c => c.gates.includes(g)]) },
+    { key: "runner", label: "runner", opts: RUNNERS.map(r => [r, r, c => c.runner === r]) },
+    { key: "time", label: t("avgGroup"), opts: [["1s", t("atLeast", "1s"), c => sumOf(c) >= 1000], ["10s", t("atLeast", "10s"), c => sumOf(c) >= 10000], ["100s", t("atLeast", "100s"), c => sumOf(c) >= 100000]] },
+    { key: "state", label: t("stateGroup"), opts: [["nosample", t("stateNoSample"), c => !Object.keys(c.means || {}).length], ["branch", t("stateBranch"), c => !!c.on_branch], ["fail", t("stateFail"), c => !!c.recent_fail]] },
+    ...GROUPS.map(g => ({
+      key: "tag:" + g.name, label: groupLabel(g), tag: true,
+      opts: (g.tags || []).map(tg => [tg.name, labelOf(tg.label), c => c.f[g.name].includes(tg.name)]),
+    })),
+  ];
 }
-const passes = (c, f, skip) => GROUPS.every(g => g.name === skip || !f.tags[g.name].length || shares(f.tags[g.name], c.f[g.name])) &&
-  (!f.gates.length || shares(f.gates, gatesOf(c)));
+const blankFilters = () => Object.fromEntries(filterGroups().map(g => [g.key, []]));
+const activeCount = f => Object.values(f).reduce((n, v) => n + v.length, 0);
+// any chosen value matches within a group, except the average-sum and state
+// groups, where every chosen condition must hold
+const passGroup = (c, g, picked) => !picked.length ||
+  (AND.has(g.key) ? g.opts.filter(o => picked.includes(o[0])).every(o => o[2](c)) : g.opts.filter(o => picked.includes(o[0])).some(o => o[2](c)));
+const passAll = (c, groups, f, skip) => groups.every(g => g.key === skip || passGroup(c, g, f[g.key] || []));
 const textMatch = (c, q) => !q || [c.name, c.accident, c.detection, c.impact, c.unit, (c.run || []).join(" ")].some(s => String(s || "").toLowerCase().includes(q));
 
-function verificationsPage(r) {
-  const f = filtersFrom(r.params);
-  $("#page").innerHTML = `<div class="listpage">
-    <aside class="filters card" aria-label="${esc(t("filters"))}">
-      <div class="head"><h2>${esc(t("filters"))}</h2><a href="#/verifications">${esc(t("clearAll"))}</a></div>
-      <p class="note">${esc(t("filterHelp"))}</p>
-      <div class="fgroup"><h3>${esc(t("gatesFilter"))}</h3><div class="fchips" id="gatefilters">${GATES.map(g => {
-        const n = VERIFICATIONS.filter(c => gatesOf(c).includes(g)).length, on = f.gates.includes(g);
-        return `<button type="button" class="fchip" data-gate="${esc(g)}" aria-pressed="${on}">${esc(g)} <span class="n num">${fmt(n)}</span></button>`;
-      }).join("")}</div><p class="note">${esc(t("membershipNote"))}</p></div>
-      <div id="fgroups"></div>
-    </aside>
-    <section class="listmain">
-      <div class="toolbar">
-        <label class="sr" for="q">${esc(t("searchList"))}</label>
-        <input id="q" type="search" placeholder="${esc(t("searchList"))}" value="${esc(list.q)}">
-        <label class="note" for="sort">${esc(t("sort"))}</label>
-        <select id="sort">${[["inventory", "sortInv"], ["unit", "sortUnit"], ["cost", "sortCost"]].map(([v, k]) =>
-          `<option value="${v}"${list.sort === v ? " selected" : ""}>${esc(t(k))}</option>`).join("")}</select>
-      </div>
-      <div class="summary" id="summary"></div>
-      <div class="rows card" id="rows"></div>
-    </section></div>`;
-  const draw = () => {
-    const q = list.q.trim().toLowerCase();
-    const base = VERIFICATIONS.filter(c => textMatch(c, q));
-    $("#fgroups").innerHTML = GROUPS.map(g => {
-      const pool = base.filter(c => passes({ ...c }, { tags: Object.fromEntries(GROUPS.map(x => [x.name, x.name === g.name ? [] : f.tags[x.name]])), gates: f.gates }, g.name));
-      return `<div class="fgroup"><h3>${esc(groupTitle(g))}${groupSub(g) ? ` · ${esc(groupSub(g))}` : ""}</h3><div class="fchips">${(g.tags || []).map(tg => {
-        const n = pool.filter(c => c.f[g.name].includes(tg.name)).length, on = f.tags[g.name].includes(tg.name);
-        return `<button type="button" class="fchip" data-tag="${esc(tg.name)}" aria-pressed="${on}"${!n && !on ? " disabled" : ""}>${esc(labelOf(tg.label))} <span class="n num">${fmt(n)}</span></button>`;
-      }).join("")}</div></div>`;
-    }).join("");
-    let rows = base.filter(c => passes(c, f));
-    if (list.sort === "unit") rows = [...rows].sort((a, b) => String(a.unit || "").localeCompare(String(b.unit || "")) || a.id - b.id);
-    if (list.sort === "cost") rows = [...rows].sort((a, b) => (b.stats?.total_ms || 0) - (a.stats?.total_ms || 0) || a.id - b.id);
-    const on = GROUPS.flatMap(g => f.tags[g.name]).concat(f.gates.map(g => `gate:${g}`));
-    $("#summary").innerHTML = `<span>${t("count", fmt(rows.length), fmt(VERIFICATIONS.length))}</span>` + on.map(tg => `<span class="chip">${esc(tg.startsWith("gate:") ? tg.slice(5) : tagText(tg))}</span>`).join("");
-    const shown = rows.slice(0, list.shown);
-    $("#rows").innerHTML = rows.length ? `<div class="rowhead"><span>${esc(t("colImpact"))}</span><span>${esc(t("colTags"))}</span><span>${esc(t("colGate"))}</span></div>` +
-      shown.map(c => {
-        const omit = !c.stats && omissionsOf(c.key).length ? `<span class="omitnote">${esc(t("omitted"))}</span>` : "";
-        return `<a class="row" href="${href(c.key)}"><span class="what"><b>${esc(titleOf(c))}</b><span class="id">${esc(c.name)} · ${esc(c.unit)}${omit ? " · " + omit : ""}</span></span>${chips(c)}${gateBadges(c)}</a>`;
-      }).join("") +
-      (rows.length > shown.length ? `<div class="morebar"><button type="button" class="btn" id="more">${esc(t("more", fmt(Math.min(50, rows.length - shown.length)), fmt(rows.length - shown.length)))}</button></div>` : "")
-      : `<p class="empty">${esc(t(VERIFICATIONS.length ? "noMatch" : "noVerifications"))}</p>`;
+function stateFrom(params) {
+  const groups = filterGroups();
+  const st = {
+    view: params.get("view") === "process" ? "process" : "verifications",
+    group: params.get("group") === "unit" ? "unit" : "verification",
+    file: params.get("file") || ROOT_FILE,
+    sel: nodeOf(params.get("runner") || "all").id,
+    sort: store.get("sort", "avg"),
   };
-  draw();
-  $("#q").addEventListener("input", e => { list.q = e.target.value; list.shown = 50; draw() });
-  $("#sort").addEventListener("change", e => { list.sort = e.target.value; store.set("sort", list.sort); draw() });
-  const syncHash = () => {
-    const all = GROUPS.flatMap(x => f.tags[x.name]);
-    const qs = [];
-    if (all.length) qs.push("tags=" + all.map(encodeURIComponent).join(","));
-    if (f.gates.length) qs.push("gates=" + f.gates.map(encodeURIComponent).join(","));
-    setHash("#/verifications" + (qs.length ? "?" + qs.join("&") : ""));
-  };
-  $("#page").addEventListener("click", e => {
-    const gt = e.target.closest("[data-gate]");
-    if (gt) {
-      const g = gt.dataset.gate;
-      f.gates = f.gates.includes(g) ? f.gates.filter(x => x !== g) : [...f.gates, g];
-      syncHash(); list.shown = 50; draw(); return;
+  const f = blankFilters();
+  for (const v of splitParam(params.get("tags"))) if (TAG[v]) f["tag:" + TAG[v].group].push(v);
+  for (const v of splitParam(params.get("gates"))) if (GATES.includes(v)) f.gate.push(v);
+  for (const k of ["hit", "time", "state"]) {
+    const g = groups.find(x => x.key === k);
+    for (const v of splitParam(params.get(k))) if (g.opts.some(o => o[0] === v)) f[k].push(v);
+  }
+  if (st.view !== "process") for (const v of splitParam(params.get("runner"))) if (RUNNERS.includes(v)) f.runner.push(v);
+  return { st, f };
+}
+
+function syncHash(st, f) {
+  const qs = new URLSearchParams();
+  const tags = GROUPS.flatMap(g => f["tag:" + g.name]);
+  if (tags.length) qs.set("tags", tags.join(","));
+  if (f.gate.length) qs.set("gates", f.gate.join(","));
+  for (const k of ["hit", "time", "state"]) if (f[k].length) qs.set(k, f[k].join(","));
+  if (st.view === "process") { if (st.sel !== "all") qs.set("runner", st.sel) }
+  else if (f.runner.length) qs.set("runner", f.runner.join(","));
+  if (list.q) qs.set("q", list.q);
+  if (st.file && st.file !== ROOT_FILE) qs.set("file", st.file);
+  if (st.group === "unit") qs.set("group", "unit");
+  if (st.view === "process") qs.set("view", "process");
+  const s = qs.toString();
+  setHash("#/verifications" + (s ? "?" + s : ""));
+}
+
+function sourceLine() {
+  const parts = [];
+  const local = META.local || { attempts: {} };
+  const runs = Object.values(local.attempts || {}).reduce((s, n) => s + n, 0);
+  parts.push(local.from ? t("srcLocal", day(local.from), day(local.to), fmt(runs)) : t("srcLocalEmpty"));
+  const ci = META.ci;
+  if (ci) {
+    parts.push(t("srcCI", ci.repo, ci.from ? `${day(ci.from)} – ${day(ci.to)}` : "", ci.attempts ? fmt(ci.attempts) : ""));
+    if (ci.status) {
+      // a stopped sync says why; the range above still shows what the cache holds
+      parts.push(t({ offline: "srcOffline", "no credentials": "srcNoCredentials", "no artifact": "srcNoArtifact" }[ci.status] || "srcOffline"));
+    } else {
+      if (ci.synced) parts.push(t("srcSynced", when(ci.synced)));
+      if (ci.pending) parts.push(t("srcPending", fmt(ci.pending)));
     }
-    const b = e.target.closest(".fchip[data-tag]");
-    if (!b) return;
-    const tg = b.dataset.tag, g = TAG[tg].group;
-    f.tags[g] = f.tags[g].includes(tg) ? f.tags[g].filter(x => x !== tg) : [...f.tags[g], tg];
-    syncHash(); list.shown = 50; draw();
+  }
+  return parts.join(" · ");
+}
+
+// gateSumHTML shows each gate's total twice: the sum of its members' means,
+// and the timed results of its latest run on the current branch.
+function gateSumHTML() {
+  const avg = (D.summary || {}).average || [];
+  const branch = (D.summary || {}).branch || [];
+  const sum = rows => rows.reduce((s, r) => s + (r.ms || 0), 0);
+  const avgTotal = sum(avg), branchTotal = sum(branch);
+  const totalText = (rows, n) => rows.some(r => r.ms != null) ? ms(n) : "–";
+  const bar = (rows, total) => `<span class="gbar">${total ? rows.map(r => r.ms ? `<span style="width:${(r.ms / total) * 100}%;background:${gateColor(r.gate)}"></span>` : "").join("") : ""}</span>`;
+  const items = (rows, withTime) => rows.length ? `<div class="gitems">${rows.map(r =>
+    `<span><i style="background:${gateColor(r.gate)}"></i><span class="note">${esc(r.gate)}</span><b>${r.ms == null ? "–" : ms(r.ms)}</b>${r.hits ? `<b>(${fmt(r.hits)})</b>` : ""}${withTime ? `<span class="note">${esc(when(r.time))}</span>` : ""}</span>`).join("")}</div>`
+    : `<div class="gitems"><span class="note">${esc(t("noItem"))}</span></div>`;
+  return `<section class="gatesum card">
+    <div class="ghead"><b>${esc(t("gateTitle"))}</b><span class="glegend">${GATES.map(g => `<span><i style="background:${gateColor(g)}"></i>${esc(g)}</span>`).join("")}</span></div>
+    <div class="grow">
+      <span class="glabel">${esc(t("avg"))}</span>${bar(avg, avgTotal)}<b class="gtotal">${totalText(avg, avgTotal)}</b>
+      <span class="gsp"></span>${items(avg, false)}<span class="gsp"></span>
+      <span class="glabel">${esc(t("branch"))}<code>${esc(META.branch || t("noBranch"))}</code></span>${bar(branch, branchTotal)}<b class="gtotal">${totalText(branch, branchTotal)}</b>
+      <span class="gsp"></span>${items(branch, true)}<span class="gsp"></span>
+    </div>
+  </section>`;
+}
+
+function criteriaHTML() {
+  const ns = GATES.map(g => `${g} ${fmt(CRITERIA.average?.[g] ?? 0)}`).join(" · ");
+  const to = META.generated ? day(META.generated) : "";
+  const from = META.generated ? day(new Date(Date.parse(META.generated) - (CRITERIA.hits?.days || 365) * 864e5)) : "";
+  const last = Object.entries(CRITERIA.hits?.last || {}).map(([g, n]) => t("criteriaHitLast", g, fmt(n)));
+  return `<div><b>${esc(t("criteriaAvg"))}</b><span>${esc(t("criteriaAvgText"))}</span><span class="note">${esc(ns)}</span></div>
+    <div><b>${esc(t("criteriaBranch"))}</b><span>${esc(t("criteriaBranchText"))}</span></div>
+    <div><b>${esc(t("criteriaHit"))}</b><span>${esc(from)} – ${esc(to)}</span><span>${esc(t("criteriaHitText"))}</span><span class="note">${esc(t("criteriaHitCI"))}</span>${last.map(l => `<span class="note">${esc(l)}</span>`).join("")}</div>`;
+}
+
+const procNodePath = n => n.kind === "unit" ? `${n.runner} · ${n.unit}` : procNodeLabel(n);
+const selPath = st => st.view === "process" ? procNodePath(nodeOf(st.sel)) : (st.file || ROOT_FILE || t("filesTitle"));
+const sortOptions = view => {
+  const opts = [["avg", t("sortAvg")]];
+  if (view !== "process") opts.push(["inventory", t("sortInv")], ["hits", t("sortHits")]);
+  for (const g of GATES) opts.push([g, t("sortGate", g)]);
+  return opts;
+};
+
+function verificationsPage(r) {
+  const { st, f } = stateFrom(r.params);
+  list.q = r.params.get("q") || "";
+  if (ROOT_FILE && !opened.size) {
+    opened.add(ROOT_FILE);
+    for (let p = st.file; p; p = FILE_BY.get(p)?.parent) opened.add(p);
+  }
+  $("#page").innerHTML = `<div class="pagehead"><h1>${esc(t("title"))}</h1><p class="note">${esc(sourceLine())}</p></div>
+    ${gateSumHTML()}
+    <nav class="views" aria-label="${esc(t("viewLabel"))}">${[["verifications", "viewVerif"], ["process", "viewProcess"]].map(([v, k]) =>
+      `<button type="button" data-view="${v}" aria-pressed="${st.view === v}">${esc(t(k))}</button>`).join("")}</nav>
+    <div class="listpage">
+      <div class="sidecol">
+        <aside class="files card" aria-label="${esc(st.view === "process" ? t("procFind") : t("filesTitle"))}">
+          <div class="fhead"><b>${esc(st.view === "process" ? t("procTitle") : t("filesTitle"))}</b><span class="fcount">${esc(st.view === "process" ? fmt(PROCS.length) : t("files", fmt(FILES.length)))}</span></div>
+          <label class="sr" for="sidefind">${esc(st.view === "process" ? t("procFind") : t("filesFind"))}</label>
+          <input id="sidefind" type="search" placeholder="${esc(st.view === "process" ? t("procFind") : t("filesFind"))}" value="${esc(st.view === "process" ? list.procFind : list.fileFind)}">
+          <div id="sidelist" role="tree"></div>
+        </aside>
+        <section class="criteria" aria-label="${esc(t("criteriaAvg"))}">${criteriaHTML()}</section>
+      </div>
+      <section class="listmain">
+        <div class="toolbar">
+          <span class="sel"><code id="selpath">${esc(selPath(st))}</code><span class="note" id="selcount"></span></span>
+          <span class="tools2">
+            ${st.view === "verifications" ? `<span class="seg" role="group" aria-label="${esc(t("grouping"))}">${[["verification", "groupVerification"], ["unit", "groupUnit"]].map(([v, k]) =>
+              `<button type="button" data-group="${v}" aria-pressed="${st.group === v}">${esc(t(k))}</button>`).join("")}</span>` : ""}
+            <label class="sr" for="sort">${esc(t("sort"))}</label>
+            <select id="sort">${sortOptions(st.view).map(([v, label]) => `<option value="${v}"${st.sort === v ? " selected" : ""}>${esc(label)}</option>`).join("")}</select>
+          </span>
+        </div>
+        ${st.view === "verifications" ? `<div class="card filtercard" role="group" aria-label="${esc(t("filters"))}">
+          <div class="fbar">
+            <label class="sr" for="q">${esc(t("searchList"))}</label>
+            <input id="q" type="search" placeholder="${esc(t("searchList"))}" value="${esc(list.q)}">
+            <button type="button" class="fbtn" id="ftoggle" aria-expanded="${list.filterOpen}">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M4.5 8h7M7 12h2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>${esc(t("filters"))}<span class="badge" id="fbadge"${activeCount(f) ? "" : " hidden"}>${activeCount(f)}</span>
+            </button>
+          </div>
+          <div class="fdetails" id="fdetails"${list.filterOpen ? "" : " hidden"}>
+            <div class="fgrid" id="fgroups"></div>
+            <p class="fnote" style="margin-left:104px">${esc(t("membershipNote"))}</p>
+            <div class="fgrid tags" id="ftagroups"></div>
+          </div>
+          <div class="applied" id="applied"></div>
+        </div>` : ""}
+        <div class="card vtable" id="rows"></div>
+      </section>
+    </div>`;
+
+  const draw = () => {
+    const groups = filterGroups();
+    if (st.view === "process") {
+      const ids = new Set(nodeOf(st.sel).ids);
+      // a process row names the task it ran, then the runner and unit it ran for
+      const rows = PROCS.filter(p => ids.has(p.id)).map(p => ({ ...p, title: p.what, keyline: p.unit ? `${p.runner} · ${p.unit}` : p.runner }));
+      $("#selcount").textContent = t("countProc", fmt(rows.length));
+      drawProcSide(st);
+      drawRows(st, sortRows(rows, st.sort));
+      return;
+    }
+    const needle = list.q.trim().toLowerCase();
+    const scope = filesOf(st.file);
+    const inScope = VERIFICATIONS.filter(c => scope.includes(c.file));
+    const base = inScope.filter(c => textMatch(c, needle));
+    const kept = base.filter(c => passAll(c, groups, f));
+    const count = activeCount(f);
+    drawChips(groups, base, f);
+    drawApplied(groups, f);
+    const badge = $("#fbadge");
+    badge.textContent = count;
+    badge.hidden = !count;
+    $("#selcount").textContent = (needle || count) ? t("countMatch", fmt(kept.length)) : t("countAll", fmt(inScope.length));
+    drawSide(st);
+    const rows = sortRows(st.group === "unit" ? unitRows(kept) : kept, st.sort);
+    if (st.group === "verification" && list.expanded === undefined) list.expanded = rows.length ? rows[0].key : null;
+    drawRows(st, rows);
+  };
+  vp = { st, f, draw };
+  draw();
+}
+
+// sortRows orders by the chosen figure, keeping the listed order for ties.
+function sortRows(rows, sort) {
+  const key = {
+    avg: r => sumOf(r),
+    hits: r => hitsOf(r),
+    inventory: r => typeof r.id === "number" ? -r.id : 0,
+    check: r => r.means?.check?.ms ?? -1,
+    commit: r => r.means?.commit?.ms ?? -1,
+    push: r => r.means?.push?.ms ?? -1,
+    ci: r => r.means?.ci?.ms ?? -1,
+  }[sort] || (r => sumOf(r));
+  return rows.map((r, i) => ({ r, i })).sort((a, b) => key(b.r) - key(a.r) || a.i - b.i).map(x => x.r);
+}
+
+// unitRows aggregates the listed verifications by their execution unit.
+function unitRows(kept) {
+  const by = new Map();
+  for (const c of kept) {
+    const k = c.unit || ".";
+    if (!by.has(k)) by.set(k, []);
+    by.get(k).push(c);
+  }
+  return [...by].map(([unit, cs]) => {
+    const means = {}, hits = {}, gates = new Set();
+    for (const g of GATES) {
+      let sum = 0, n = 0, h = 0;
+      for (const c of cs) {
+        if (c.gates.includes(g)) gates.add(g);
+        const m = c.means?.[g];
+        if (m) { sum += m.ms; n += m.k }
+        h += c.hits?.[g] || 0;
+      }
+      if (n) means[g] = { ms: sum, k: n };
+      if (h) hits[g] = h;
+    }
+    const runners = [...new Set(cs.map(c => c.runner))].sort();
+    return { unit, id: unit, title: unit, keyline: t("unitKey", runners.join(", "), fmt(cs.length)), means, hits, gates: [...gates] };
   });
-  $("#rows").addEventListener("click", e => { if (e.target.closest("#more")) { list.shown += 50; draw() } });
+}
+
+const chev = open => `<span class="chev"><svg viewBox="0 0 12 12" aria-hidden="true" style="transform:rotate(${open ? 90 : 0}deg)"><path d="M4.5 2.5 L8 6 L4.5 9.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
+
+// barCell draws the row's average sum on a log scale from 10ms to 1,000s, split
+// into the gates' shares.
+function barCell(r) {
+  const sum = sumOf(r);
+  const len = sum > 0 ? Math.min(100, Math.max(0, ((Math.log10(sum) - 1) / 5) * 100)) : 0;
+  const segs = GATES.map(g => {
+    const v = r.means?.[g]?.ms || 0;
+    return v > 0 ? `<span style="width:${(v / sum) * len}%;background:${gateColor(g)}"></span>` : "";
+  }).join("");
+  return `<span class="bar"><span class="logbar">${segs}</span><em>${sampled(r) ? ms(sum) : "–"}</em></span>`;
+}
+
+// gateCell shows the gate's mean, or – when the row has no sample there or is
+// not a member, followed by the gate's hits, which outlast membership.
+function gateCell(r, g) {
+  const m = r.means?.[g];
+  const h = r.hits?.[g] || 0;
+  return `<span class="vcell num${m ? "" : " none"}">${m ? ms(m.ms) : "–"}${h ? ` <b>(${fmt(h)})</b>` : ""}</span>`;
+}
+
+function detailHTML(c) {
+  const rows = [["diagramAccident", c.accident], ["diagramImpact", c.impact || titleOf(c)], ["diagramDetection", c.detection], ["diagramDelete", c.delete_when]];
+  return `<div class="vdetail">
+    <div class="texts">${rows.map(([k, v]) => `<span${k === "diagramImpact" ? ` class="impact"` : ""}><b>${esc(t(k))}</b><span>${esc(v || "–")}</span></span>`).join("")}</div>
+    <div class="side"><b>${esc(t("tags"))}</b>${tagRows(c) || `<span class="note">–</span>`}<a href="${href(c.key)}">${esc(t("openDiagram"))}</a></div>
+  </div>`;
+}
+
+function drawRows(st, rows) {
+  const box = $("#rows");
+  if (!rows.length) {
+    const text = st.view === "process" ? (PROCS.length ? t("noProcesses") : t("noRecords")) : (VERIFICATIONS.length ? t("noMatch") : t("noVerifications"));
+    box.innerHTML = `<p class="empty">${esc(text)}</p>`;
+    return;
+  }
+  const head = `<div class="vhead"><span></span><span>${esc(st.view === "process" ? t("colWhat") : st.group === "unit" ? t("colUnit") : t("colImpact"))}</span>
+    <span class="ticks"><span>${esc(t("colAvg"))}</span><span class="track">${TICKS.map(k => `<span style="left:${k.at}">${esc(k.label)}</span>`).join("")}</span></span>
+    ${GATES.map(g => `<span class="r">${esc(g)}</span>`).join("")}</div>`;
+  const shown = rows.slice(0, list.shown);
+  const individual = st.view === "verifications" && st.group === "verification";
+  const body = shown.map(r => {
+    const title = individual ? titleOf(r) : r.title;
+    const keyline = individual ? r.key : r.keyline;
+    const cells = `<span class="what"><b>${esc(title)}</b><code>${esc(keyline)}</code></span>${barCell(r)}${GATES.map(g => gateCell(r, g)).join("")}`;
+    if (!individual) return `<div class="vrow plain"><span></span>${cells}</div>`;
+    const open = list.expanded === r.key;
+    return `<div class="vitem"><button type="button" class="vrow" data-open="${esc(r.key)}" aria-expanded="${open}">${chev(open)}${cells}</button>${open ? detailHTML(r) : ""}</div>`;
+  }).join("");
+  const rest = rows.length - shown.length;
+  box.innerHTML = head + body + (rest > 0 ? `<div class="morebar"><button type="button" class="btn" id="more">${esc(t("more", fmt(Math.min(50, rest)), fmt(rest)))}</button></div>` : "");
+}
+
+function drawChips(groups, base, f) {
+  const html = g => `<div class="frow"><span>${esc(g.label)}</span><span class="fchips">${g.opts.map(([v, label]) => {
+    const on = f[g.key].includes(v);
+    // a chip counts what stays with it chosen in place of its own group's picks
+    const trial = { ...f, [g.key]: AND.has(g.key) ? (on ? f[g.key] : [...f[g.key], v]) : [v] };
+    const n = base.filter(c => passAll(c, groups, trial)).length;
+    return `<button type="button" class="fchip" data-chip-key="${esc(g.key)}" data-chip-value="${esc(v)}" aria-pressed="${on}"${!n && !on ? " disabled" : ""}>${esc(label)} <span class="n num">${fmt(n)}</span></button>`;
+  }).join("")}</span></div>`;
+  $("#fgroups").innerHTML = groups.filter(g => !g.tag).map(html).join("");
+  $("#ftagroups").innerHTML = groups.filter(g => g.tag).map(html).join("");
+}
+
+function drawApplied(groups, f) {
+  const rows = groups.flatMap(g => f[g.key].map(v => ({ key: g.key, value: v, label: g.label, text: g.opts.find(o => o[0] === v)?.[1] || v })));
+  $("#applied").hidden = !rows.length;
+  $("#applied").innerHTML = rows.length ? `<b>${esc(t("applied"))}</b>${rows.map(r =>
+    `<button type="button" class="fchip" data-remove-key="${esc(r.key)}" data-remove-value="${esc(r.value)}" aria-label="${esc(t("remove", `${r.label} ${r.text}`))}"><span class="note">${esc(r.label)}</span>${esc(r.text)}<span class="x" aria-hidden="true">×</span></button>`).join("")}<button type="button" class="linkbtn" id="clr">${esc(t("clearAll"))}</button>` : "";
+}
+
+// drawSide lists the ledger files: a chevron expands, the label selects, and a
+// selection lists only that file's and its descendants' verifications.
+function drawSide(st) {
+  const needle = list.fileFind.trim().toLowerCase();
+  const memo = new Map();
+  const match = p => {
+    if (memo.has(p)) return memo.get(p);
+    const f = FILE_BY.get(p);
+    const yes = !needle || fileLabel(p, f.parent).toLowerCase().includes(needle) || p.toLowerCase().includes(needle) ||
+      (FILE_KIDS.get(p) || []).some(match);
+    memo.set(p, yes);
+    return yes;
+  };
+  const out = [];
+  const walk = (path, depth) => {
+    if (!match(path)) return;
+    const kids = FILE_KIDS.get(path) || [];
+    const open = opened.has(path);
+    out.push(`<div class="fnode" style="padding-left:${depth * 14}px">
+      ${kids.length ? `<button type="button" class="fchev" data-chev="${esc(path)}" aria-expanded="${open}" aria-label="${esc(fileLabel(path, FILE_BY.get(path).parent))}"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4.5 2.5 L8 6 L4.5 9.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>` : `<span style="width:14px"></span>`}
+      <button type="button" class="flabel" role="treeitem" data-file="${esc(path)}" aria-current="${path === st.file}" title="${esc(path)}">${esc(fileLabel(path, FILE_BY.get(path).parent))}</button>
+      <span class="fcount" style="text-align:right">${fmt(FILE_COUNT.get(path) || 0)}</span>
+    </div>`);
+    if (needle || open) for (const kid of kids) walk(kid, depth + 1);
+  };
+  if (ROOT_FILE) walk(ROOT_FILE, 0);
+  $("#sidelist").innerHTML = out.join("");
+}
+
+// drawProcSide lists runners and their units, with prepare and the nx lookup
+// under Shared.
+function drawProcSide(st) {
+  const needle = list.procFind.trim().toLowerCase();
+  const visible = n => !needle || String(procNodeLabel(n) || "").toLowerCase().includes(needle) || String(n.runner || "").toLowerCase().includes(needle);
+  const out = [];
+  let head = null;
+  for (const n of PROC_NODES) {
+    if (n.kind === "runner" || n.kind === "shared") { head = n; continue }
+    if (!visible(n)) continue;
+    if (head) {
+      out.push(`<span class="fgroup-head">${esc(n.kind === "unit" ? head.runner : t("shared"))}</span>`);
+      head = null;
+    }
+    out.push(`<div class="fnode"><span style="width:14px"></span><button type="button" class="flabel" role="treeitem" data-sel="${esc(n.id)}" aria-current="${n.id === st.sel}">${esc(procNodeLabel(n))}</button><span class="fcount" style="text-align:right">${fmt(n.ids.length)}</span></div>`);
+  }
+  $("#sidelist").innerHTML = out.join("");
+}
+
+// ---- verifications page events ----
+$("#page").addEventListener("click", e => {
+  if (!vp) return;
+  const { st, f, draw } = vp;
+  const view = e.target.closest("[data-view]");
+  if (view) { st.view = view.dataset.view; syncHash(st, f); render(); return }
+  const grp = e.target.closest("[data-group]");
+  if (grp) { st.group = grp.dataset.group; list.shown = 50; syncHash(st, f); draw(); return }
+  if (e.target.closest("#ftoggle")) {
+    list.filterOpen = !list.filterOpen;
+    $("#ftoggle").setAttribute("aria-expanded", String(list.filterOpen));
+    $("#fdetails").hidden = !list.filterOpen;
+    return;
+  }
+  if (e.target.closest("#clr")) { Object.assign(f, blankFilters()); list.shown = 50; syncHash(st, f); draw(); return }
+  const rm = e.target.closest("[data-remove-key]");
+  if (rm) {
+    const k = rm.dataset.removeKey, v = rm.dataset.removeValue;
+    f[k] = f[k].filter(x => x !== v);
+    list.shown = 50; syncHash(st, f); draw(); return;
+  }
+  const chip = e.target.closest("[data-chip-key]");
+  if (chip) {
+    const k = chip.dataset.chipKey, v = chip.dataset.chipValue;
+    f[k] = f[k].includes(v) ? f[k].filter(x => x !== v) : [...f[k], v];
+    list.shown = 50; syncHash(st, f); draw(); return;
+  }
+  const file = e.target.closest("[data-file]");
+  if (file) { st.file = file.dataset.file; list.shown = 50; syncHash(st, f); render(); return }
+  const chevron = e.target.closest("[data-chev]");
+  if (chevron) {
+    const path = chevron.dataset.chev;
+    if (opened.has(path)) opened.delete(path); else opened.add(path);
+    drawSide(st);
+    const again = [...document.querySelectorAll("[data-chev]")].find(b => b.dataset.chev === path);
+    if (again) again.focus();
+    return;
+  }
+  const sel = e.target.closest("[data-sel]");
+  if (sel) { st.sel = sel.dataset.sel; syncHash(st, f); render(); return }
+  const open = e.target.closest("[data-open]");
+  if (open) { list.expanded = list.expanded === open.dataset.open ? null : open.dataset.open; draw(); return }
+  if (e.target.closest("#more")) { list.shown += 50; draw() }
+});
+$("#page").addEventListener("input", e => {
+  if (!vp) return;
+  if (e.target.id === "q") { list.q = e.target.value; list.shown = 50; syncHash(vp.st, vp.f); vp.draw() }
+  else if (e.target.id === "sidefind" && vp.st.view === "process") { list.procFind = e.target.value; drawProcSide(vp.st) }
+  else if (e.target.id === "sidefind") { list.fileFind = e.target.value; drawSide(vp.st) }
+});
+$("#page").addEventListener("change", e => {
+  if (!vp || e.target.id !== "sort") return;
+  vp.st.sort = e.target.value;
+  store.set("sort", vp.st.sort);
+  vp.draw();
+});
+
+// ---- diagram rail ----
+// The rail lists every verification, grouped by the ledger file that defines it
+// or by the runner that executes it, and the diagram shows the row picked there.
+// Its search, tag filter, folds, and collapsed state last for the session, so
+// moving between verifications keeps the list where it was.
+const RAIL_PAGE = 30;         // rows a unit group lists before "more"
+const RAIL_FILTER_OPEN = 200; // a filter opens every group up to this many rows
+const rail = { open: true, by: "file", q: "", tags: [], tagOpen: false, fold: {}, more: {} };
+// the ledger file a verification is defined in: the record's file, or the
+// origin line when it carries none
+const fileOf = c => c.file || String(c.origin || "").split(": ")[0];
+const shortUnit = u => String(u || ".").split("/").slice(-2).join("/");
+
+// A row matches the search by the fields the list search reads, and the tag
+// filter by any chosen tag within its group, with every chosen group taken.
+function railTextHit(c, q) {
+  return !q || [c.name, c.unit, c.file, c.impact, c.detection, c.accident, (c.run || []).join(" ")]
+    .some(s => String(s || "").toLowerCase().includes(q));
+}
+const railTagHit = (c, except) => GROUPS.every(g => g.name === except ||
+  !rail.tags.some(tg => TAG[tg] && TAG[tg].group === g.name) ||
+  rail.tags.some(tg => TAG[tg] && TAG[tg].group === g.name && c.tags.includes(tg)));
+
+// A time bar prints its scale inside the track and its fill covers the scale;
+// the value sits inside the filled end when it fits, and just past it otherwise,
+// where it takes the first scale label's place. A scale label shows only while
+// neither the fill nor the value reaches it. A row's scale runs from 100ms to
+// 1,000s; a group sums its rows' averages on a scale from 10s to 10,000s.
+const ROW_SCALE = { lo: 2, span: 4, ticks: ["1s", "10s", "100s", "1,000s"] };
+const SUM_SCALE = { lo: 4, span: 3, ticks: ["100s", "1,000s", "10,000s"] };
+const scaleRight = (i, span) => i === span ? "3px" : `calc(${(((span - i) / span) * 100).toFixed(2)}% + 3px)`;
+// the fill covers the scale, so the value takes the ink of the segment under it
+const BAR_INK = { check: "var(--ink-check)", commit: "var(--ink-commit)", push: "var(--ink-push)", ci: "var(--ink-ci)" };
+function timeBar(byGate, scale) {
+  const total = GATES.reduce((s, g) => s + (byGate[g] || 0), 0), has = total > 0;
+  const len = has ? Math.min(1, Math.max(0, (Math.log10(total) - scale.lo) / scale.span)) : 0;
+  const used = GATES.filter(g => byGate[g] > 0), pct = (len * 100).toFixed(2) + "%", inside = len >= 0.17;
+  return {
+    segs: used.map(g => ({ color: gateColor(g), width: (len * byGate[g] / total * 100).toFixed(2) + "%" })),
+    sum: has ? ms(total) : t("noTimeSamples"),
+    left: inside ? "auto" : pct, right: inside ? `calc(100% - ${pct})` : "auto",
+    ink: !has ? "var(--muted)" : inside ? BAR_INK[used[used.length - 1]] : "var(--fg)",
+    ticks: scale.ticks.map((label, i) => ({ label, at: i + 1 }))
+      .filter(k => has && k.at / scale.span * 100 - 12 >= len * 100 + (inside ? 0 : 18))
+      .map(k => ({ label: k.label, right: scaleRight(k.at, scale.span) })),
+  };
+}
+const gateMs = rows => Object.fromEntries(GATES.map(g => [g, rows.reduce((s, c) => s + (c.means?.[g]?.ms || 0), 0)]));
+const barHTML = (b, kind) => `<span class="tbar ${kind}">${b.ticks.map(k => `<span class="tick" style="right:${k.right}">${esc(k.label)}</span>`).join("")}<span class="segs">${b.segs.map(s => `<span style="width:${s.width};background:${s.color}"></span>`).join("")}</span><span class="value" style="left:${b.left};right:${b.right};color:${b.ink}">${esc(b.sum)}</span></span>`;
+const railChev = `<span class="rchev" aria-hidden="true"><svg><use href="#i-chevron"/></svg></span>`;
+
+// railTree draws the list and counts what it shows. A heading folds like a
+// unit, and its sum bar shows folded or open.
+function railTree(cur) {
+  const q = rail.q.trim().toLowerCase(), filtering = q !== "" || rail.tags.length > 0;
+  const outer = rail.by === "file" ? fileOf : c => c.runner || "";
+  const tree = new Map();
+  let shown = 0;
+  for (const c of VERIFICATIONS) {
+    if (!railTextHit(c, q) || !railTagHit(c)) continue;
+    shown++;
+    // a command's unit is only its working directory, so commands sit under the
+    // heading without a unit group
+    const a = outer(c), b = c.is_command ? "" : (c.unit || ".");
+    if (!tree.has(a)) tree.set(a, new Map());
+    const m = tree.get(a);
+    if (!m.has(b)) m.set(b, []);
+    m.get(b).push(c);
+  }
+  const out = [`<div class="rpad"></div>`];
+  const row = (c, text, ind) => {
+    const on = c === cur;
+    return `<button type="button" role="treeitem" aria-current="${on}" title="${esc(c.name + " — " + titleOf(c))}" data-rail-go="${esc(c.key)}" class="rrow" style="padding-left:${ind}"><span class="rname"><span class="dot" style="background:${hc(c)}"></span><span>${esc(text)}</span></span>${barHTML(timeBar(gateMs([c]), ROW_SCALE), "row")}</button>`;
+  };
+  const sep = (inset, weight, tone) => `<div class="rsep" aria-hidden="true" style="height:${weight};margin-left:${inset};background:${tone}"></div>`;
+  for (const a of [...tree.keys()].sort()) {
+    const m = tree.get(a), all = [...m.values()].flat(), hk = rail.by + "|" + a;
+    const open = rail.fold[hk] ?? (all.includes(cur) || (filtering && shown <= RAIL_FILTER_OPEN));
+    out.push(`<button type="button" aria-expanded="${open}" title="${esc(a)}" data-rail-fold="${esc(hk)}" class="rheadrow">${railChev}<span class="rheadtext">${esc(a)}</span><span class="rcount">${fmt(all.length)}</span></button><div class="rbar">${barHTML(timeBar(gateMs(all), SUM_SCALE), "sum")}</div>`);
+    if (!open) continue;
+    for (const b of [...m.keys()].sort()) {
+      const rows = m.get(b), gk = hk + "|" + b;
+      if (b === "") { for (const c of rows) out.push(row(c, c.name + (c.unit && c.unit !== "." ? " · " + c.unit : ""), "22px")); continue }
+      const isOpen = rail.fold[gk] ?? (rows.includes(cur) || (filtering && shown <= RAIL_FILTER_OPEN));
+      out.push(`<button type="button" aria-expanded="${isOpen}" title="${esc(b)}" data-rail-fold="${esc(gk)}" class="rgroup">${railChev}<span class="runit">${esc(shortUnit(b))}</span><span class="rcount">${fmt(rows.length)}</span></button><div class="rbar unit">${barHTML(timeBar(gateMs(rows), SUM_SCALE), "sum")}</div>`);
+      if (!isOpen) continue;
+      const n = rail.more[gk] || RAIL_PAGE;
+      for (const c of rows.slice(0, n)) out.push(row(c, c.name.split(" > ").pop(), "38px"));
+      if (rows.length > n) out.push(`<button type="button" class="rmore" data-rail-more="${esc(gk)}">${esc(t("moreLeft", fmt(Math.min(RAIL_PAGE, rows.length - n)), fmt(rows.length - n)))}</button>`);
+      // an opened unit ends with a rule indented to its rows, an opened file with one indented to its units
+      out.push(sep("38px", "2px", "var(--line)"));
+    }
+    out.push(sep("22px", "3px", "var(--wire)"));
+  }
+  if (!shown) out.push(`<p class="rempty">${esc(t("railEmpty"))}</p>`);
+  return { shown, html: out.join("") };
+}
+
+// railInner draws the whole rail: the count and its collapse button, the search
+// with the tag filter beside it, the grouping switch, and the list.
+function railInner(cur) {
+  if (!rail.open) return `<div class="railclosed"><button type="button" class="iconbtn" data-rail-toggle aria-label="${esc(t("railOpen"))}" title="${esc(t("railOpen"))}"><svg class="i"><use href="#i-panel-open"/></svg></button></div>`;
+  const { shown, html } = railTree(cur);
+  const q = rail.q.trim().toLowerCase();
+  // a chip counts what stays with it chosen in place of its own group's picks
+  const chip = (tag, label, g) => {
+    const on = rail.tags.includes(tag), n = VERIFICATIONS.filter(c => c.tags.includes(tag) && railTextHit(c, q) && railTagHit(c, g)).length;
+    return `<button type="button" aria-pressed="${on}" data-rail-tag="${esc(tag)}"${n || on ? "" : ` data-empty="true"`}>${HARM[tag] ? `<i class="hdot" style="background:var(--h-${HARM[tag]})"></i>` : ""}${esc(label)}<span class="n num">${fmt(n)}</span></button>`;
+  };
+  const groups = GROUPS.filter(g => (g.tags || []).length).map(g =>
+    `<div class="rgroup2"><span>${esc(groupLabel(g))}</span><div class="rchips">${(g.tags || []).map(tg => chip(tg.name, labelOf(tg.label) || tg.name, g.name)).join("")}</div></div>`).join("");
+  return `<div class="rhead">
+      <div class="rline"><b>${esc(shown === VERIFICATIONS.length ? t("countAll", fmt(VERIFICATIONS.length)) : t("railCount", fmt(VERIFICATIONS.length), fmt(shown)))}</b><button type="button" class="iconbtn" data-rail-toggle aria-label="${esc(t("railClose"))}" title="${esc(t("railClose"))}"><svg class="i"><use href="#i-panel-close"/></svg></button></div>
+      <div class="rsearch"><label class="sr" for="railq">${esc(t("railSearch"))}</label><input id="railq" type="search" value="${esc(rail.q)}" placeholder="${esc(t("railSearch"))}"><span class="rfwrap"><button type="button" class="rfbtn" data-rail-filter aria-expanded="${rail.tagOpen}" data-on="${rail.tags.length > 0}" aria-controls="tagfilter" aria-label="${esc(t("railFilter"))}" title="${esc(t("railFilter"))}"><svg class="i"><use href="#i-filter"/></svg>${rail.tags.length ? `<span class="badge">${fmt(rail.tags.length)}</span>` : ""}</button><div class="rpanel" id="tagfilter" data-open="${rail.tagOpen}" aria-hidden="${!rail.tagOpen}"><div>${groups}${rail.tags.length ? `<button type="button" class="rclear" data-rail-tagclear>${esc(t("clearTags"))}</button>` : ""}</div></div></span></div>
+      <div role="group" aria-label="${esc(t("railGroup"))}" class="rseg">${[["file", "railByFile"], ["runner", "railByRunner"]].map(([k, key]) => `<button type="button" aria-pressed="${rail.by === k}" data-rail-by="${k}">${esc(t(key))}</button>`).join("")}</div>
+    </div>
+    <div class="rtree" role="tree" aria-label="${esc(t("railLabel"))}" id="railtree">${html}</div>`;
 }
 
 // ---- diagram page ----
-const PAGE = 5, RESULT_LIMIT = 40, TRAIL_LIMIT = 8;
-const mm = { open: {}, key: null };
+const PAGE = 5;
+const mm = { open: {}, key: null, full: false, basis: false };
 function diagramPage(r) {
+  vp = null;
   if (!VERIFICATIONS.length) { $("#page").innerHTML = `<p class="empty">${esc(t("noVerifications"))}</p>`; return }
   let key = r.key;
   if (key == null) { const last = store.get("sel", null); key = BY_KEY.has(last) ? last : VERIFICATIONS[0].key; setHash(href(key)) }
   const id = BY_KEY.get(key);
   if (id == null) { $("#page").innerHTML = `<p class="empty">${esc(t("noVerification"))} <code>${esc(key)}</code></p>`; return }
-  if (mm.key !== key) { mm.open = { closest: PAGE }; mm.key = key }
+  if (mm.key !== key) { mm.open = {}; mm.key = key; mm.full = false; mm.basis = false }
   store.set("sel", key);
-  const trail = [key, ...store.get("trail", []).filter(k => k !== key && BY_KEY.has(k))].slice(0, TRAIL_LIMIT);
-  store.set("trail", trail);
   const c = VERIFICATIONS[id];
 
-  $("#page").innerHTML = `<div class="picker" id="picker">
-      <div class="sbox"><label class="sr" for="find">${esc(t("searchVerification"))}</label>
-        <input id="find" type="search" role="combobox" aria-expanded="false" aria-controls="results" aria-autocomplete="list" autocomplete="off" placeholder="${esc(t("searchVerification"))}">
-        <div class="results" id="results" role="listbox" hidden></div></div>
-      <div class="trail">${trail.length > 1 ? `<span class="note">${esc(t("recent"))}</span>` + trail.map(k => {
-        const o = VERIFICATIONS[BY_KEY.get(k)];
-        return `<button type="button" data-key="${esc(k)}" aria-current="${k === key}" title="${esc(titleOf(o))}"><span class="dot" style="background:${hc(o)}"></span><span>${esc(o.name)}</span></button>`;
-      }).join("") : ""}</div>
-    </div>
-    <div class="mm" id="mm"><svg class="wires" id="wires" aria-hidden="true"></svg>
-      <div class="side left" id="left"></div><article class="core" id="core"></article><div class="side right" id="right"></div></div>`;
+  // the rail and the diagram share the whole width: the rail holds its own
+  // scroll, the diagram takes the rest
+  $("#page").innerHTML = `<div class="board" data-rail="${rail.open ? "open" : "closed"}">
+      <aside class="rail" id="rail" aria-label="${esc(t("railLabel"))}">${railInner(c)}</aside>
+      <div class="dg"><div class="mm" id="mm"><svg class="wires" id="wires" aria-hidden="true"></svg>
+        <div class="side left" id="left"></div><article class="core" id="core"></article><div class="side right" id="right"></div></div></div>
+    </div>`;
 
   const core = $("#core");
   core.style.setProperty("--hc", hc(c));
   const omits = omissionsOf(c.key);
-  core.innerHTML = `<span class="eyebrow">${esc((c.gates || []).join(" · ") || t("modeUnknown"))}</span><p class="out">${esc(titleOf(c))}</p>${chips(c)}${gateBadges(c)}<span class="mono note">${esc(c.name)}</span>` +
+  const [head, field, text] = c.detection ? ["diagramDetection", "detection", c.detection]
+    : c.is_command ? ["diagramCommand", "", (c.run || []).join(" ")]
+    : ["diagramVerification", "", c.name];
+  const states = [
+    ...(c.on_branch ? [["on-branch", "stateBranch", "diagramBranchHint"]] : []),
+    ...(c.recent_fail ? [["fail", "stateFail", "diagramFailHint"]] : []),
+    ...(!c.gates.some(g => c.means?.[g]) ? [["", "stateNoSample", "diagramNoSampleHint"]] : []),
+  ];
+  // a contract head asks its question and names the ledger field on a second line
+  const fieldHead = (label, raw) => `${esc(t(label))}${raw ? `<code>${esc(raw)}</code>` : ""}`;
+  core.innerHTML = `<span class="eyebrow">${fieldHead(head, field)}</span>
+    <p class="detection" id="detection">${esc(text)}</p>
+    <button type="button" class="detection-toggle" id="detection-toggle" aria-expanded="${mm.full}" aria-controls="detection" hidden>${esc(t(mm.full ? "diagramCollapse" : "diagramShowAll"))}</button>
+    ${c.is_command ? "" : `<div class="impact"><span class="impact-label">${fieldHead("diagramImpact", "impact")}</span><p>${esc(c.impact || "–")}</p></div>`}
+    ${chips(c)}${gateBadges(c)}
+    ${states.length ? `<div class="statepills">${states.map(([kind, label, tip]) => `<span class="statepill ${kind}" title="${esc(t(tip))}">${esc(t(label))}</span>`).join("")}</div>` : ""}` +
+    // the headline is the name itself when there is nothing else to lead with
+    (text === c.name ? "" : `<span class="mono note">${esc(c.name)}</span>`) +
     (omits.length ? `<span class="note">${esc(t("omittedReason", omits[omits.length - 1].reason || c.key))} · ${esc(omits[omits.length - 1].gate)} · ${esc(when(omits[omits.length - 1].time))}</span>` : "");
   const branch = (k, head, leaves) => `<div class="branch"><div class="bhead" data-wire="core" id="h-${k}">${head}</div><div class="leaves">${leaves.join("")}</div></div>`;
+  const kv = (label, value) => `<div class="leaf kv" data-wire="h-loc"><b>${esc(label)}</b><span class="mono">${esc(value)}</span></div>`;
+  const at = (c.origin || "").match(/:\s*(verifications\[\d+\])$/)?.[1];
   const locLeaves = [
-    `<div class="leaf kv" data-wire="h-loc"><b>unit</b><span class="mono">${esc(c.unit)}</span></div>`,
-    `<div class="leaf kv" data-wire="h-loc"><b>runner · gates</b><span class="mono">${esc(c.runner)} · ${esc((c.gates || []).join(" · "))}</span></div>`,
-    ...(c.is_command ? [`<div class="leaf kv" data-wire="h-loc"><b>${esc(t("run"))}</b><span class="mono">${esc((c.run || []).join(" "))}</span></div>`] : []),
-    ...(c.cwd ? [`<div class="leaf kv" data-wire="h-loc"><b>${esc(t("cwd"))}</b><span class="mono">${esc(c.cwd)}</span></div>`] : []),
-    ...(c.exclusive && c.exclusive.length ? [`<div class="leaf kv" data-wire="h-loc"><b>${esc(t("exclusive"))}</b><span class="mono">${esc(c.exclusive.join(", "))}</span></div>`] : []),
-    ...(c.origin ? [`<div class="leaf kv" data-wire="h-loc"><b>${esc(t("origin"))}</b><span class="mono">${esc(c.origin)}</span></div>`] : []),
+    kv("key", c.key), kv("runner", c.runner), kv(t("diagramUnit"), c.unit),
+    ...(c.is_command ? [kv(t("run"), (c.run || []).join(" "))] : []),
+    ...(c.cwd ? [kv(t("cwd"), c.cwd)] : []),
+    ...(c.exclusive?.length ? [kv(t("exclusive"), c.exclusive.join(", "))] : []),
+    ...(c.file ? [`<div class="leaf kv" data-wire="h-loc"><b>${esc(t("origin"))}</b><span class="mono"><a href="#/verifications?file=${encodeURIComponent(c.file)}" title="${esc(t("diagramFileHint"))}">${esc(c.file)}</a>${at ? ` · ${esc(at)}` : ""}</span><span class="note">${esc(t("diagramFileHint"))}</span></div>`]
+      : c.origin ? [kv(t("origin"), c.origin)] : []),
+  ];
+  const ci = META.ci;
+  const sync = ci ? "CI · " + (ci.status
+    ? t({ offline: "srcOffline", "no credentials": "srcNoCredentials", "no artifact": "srcNoArtifact" }[ci.status] || "srcOffline")
+    : ci.synced ? t("srcSynced", when(ci.synced)) : t("diagramUnsynced")) : t("diagramLocal");
+  const processID = `unit:${c.runner}:${c.unit}`;
+  const processNode = PROC_NODES.find(n => n.id === processID) || PROC_NODES.find(n => n.id === "runner:" + c.runner) || PROC_NODES[0];
+  const costLeaves = [
+    `<div class="leaf costbar" data-wire="h-cost"><b>${esc(t("colAvg"))}</b>${barCell(c)}<span class="costticks" aria-hidden="true">${TICKS.map(tk => `<span style="left:${tk.at}">${tk.label}</span>`).join("")}</span></div>`,
+    `<div class="leaf costgates" data-wire="h-cost">${GATES.map(g => {
+      const m = c.means?.[g];
+      const tip = m ? t("diagramSamples", fmt(m.k)) : t(c.gates.includes(g) ? "diagramNoSample" : "diagramNotMember");
+      return `<div class="costgate" title="${esc(tip)}"><i style="background:${gateColor(g)}"></i><code>${g}</code>${gateCell(c, g)}</div>`;
+    }).join("")}<p class="note">${esc(t("diagramCostHint"))}</p></div>`,
+    `<details class="leaf record-basis"${mm.basis ? " open" : ""} data-wire="h-cost"><summary><b>${esc(t("diagramBasis"))}</b> <span class="sync-status${ci?.status && ci.status !== "no artifact" ? " error" : ""}">· ${esc(sync)}</span></summary><div class="criteria">${criteriaHTML()}</div><p class="note source">${esc(sourceLine())}</p></details>`,
+    `<a class="leaf process-link" data-wire="h-cost" href="#/verifications?view=process&runner=${encodeURIComponent(processNode.id)}">${esc(t("diagramProcess"))}</a>`,
   ];
   const textLeaves = (k, v) => v ? [`<div class="leaf text" data-wire="h-${k}">${esc(v)}</div>`] : [`<div class="leaf" data-wire="h-${k}"><span class="note">–</span></div>`];
   $("#left").innerHTML = [
-    branch("accident", esc(t("accident")), textLeaves("accident", c.accident)),
-    branch("detection", esc(t("detection")), textLeaves("detection", c.detection)),
-    branch("delete", esc(t("deleteWhen")), textLeaves("delete", c.delete_when)),
+    ...(c.is_command ? [] : [
+      branch("accident", fieldHead("diagramAccident", "accident"), textLeaves("accident", c.accident)),
+      branch("delete", fieldHead("diagramDelete", "delete_when"), textLeaves("delete", c.delete_when)),
+    ]),
+    branch("cost", esc(t("diagramCost")), costLeaves),
     branch("loc", esc(t("location")), locLeaves),
   ].join("");
 
-  const peers = (k, ranked, parent) => {
+  const peers = (k, ids, parent) => {
     const n = mm.open[k] || 0, w = `data-wire="${parent}"`;
-    if (!ranked.length) return [`<div class="leaf" ${w}><span class="note">${esc(t("noPeers"))}</span></div>`];
-    const toggle = `<button type="button" class="toggle" ${w} data-toggle="${esc(k)}" aria-expanded="${n > 0}">${esc(n > 0 ? t("hide") : t("show", fmt(ranked.length)))}</button>`;
+    if (!ids.length) return [`<div class="leaf" ${w}><span class="note">${esc(t("noPeers"))}</span></div>`];
+    const toggle = `<button type="button" class="toggle" ${w} data-toggle="${esc(k)}" aria-expanded="${n > 0}">${esc(n > 0 ? t("hide") : t("show", fmt(ids.length)))}</button>`;
     if (!n) return [toggle];
-    return [toggle, ...ranked.slice(0, n).map(p => peer(p.o, w, p.score)),
-      ...(n < ranked.length ? [`<button type="button" class="more" data-more="${esc(k)}">${esc(t("moreLeft", fmt(Math.min(PAGE, ranked.length - n)), fmt(ranked.length - n)))}</button>`] : [])];
+    return [toggle, ...ids.slice(0, n).map(id => peer(VERIFICATIONS[id], w)),
+      ...(n < ids.length ? [`<button type="button" class="more" data-more="${esc(k)}">${esc(t("moreLeft", fmt(Math.min(PAGE, ids.length - n)), fmt(ids.length - n)))}</button>`] : [])];
   };
-  const peer = (o, w, score) => `<a class="peer" ${w} href="${href(o.key)}" title="${esc(o.name)}"><span class="dot" style="background:${hc(o)}"></span><span class="txt">${esc(titleOf(o))}</span><span class="sc num">${score ?? ""}</span></a>`;
-  const sub = (k, text, raw, pid, parent) =>
-    `<div class="sub"><span class="tagpill" id="${pid}" data-wire="${parent}" title="${esc(raw)}">${esc(text)}${raw !== text ? `<code>${esc(raw)}</code>` : ""}</span><div class="leaves">${peers(k, rankPeers(c, INDEX.get(k) || []), pid).join("")}</div></div>`;
+  const peer = (o, w) => `<a class="peer" ${w} href="${href(o.key)}" title="${esc(o.name)}"><span class="dot" style="background:${hc(o)}"></span><span><span class="txt">${esc(titleOf(o))}</span><small class="peer-meta">${esc(t("diagramPeerMeta", sampled(o) ? ms(sumOf(o)) : "–", fmt(hitsOf(o))))}</small></span></a>`;
+  const sub = (k, text, raw, pid, parent) => {
+    const tag = k.startsWith("tag:");
+    return `<div class="sub"><${tag ? "a" : "span"} class="tagpill" id="${pid}" data-wire="${parent}" title="${esc(tag ? t("diagramTagHint") : raw)}"${tag ? ` href="#/verifications?tags=${encodeURIComponent(raw)}"` : ""}>${esc(text)}${raw !== text ? `<code>${esc(raw)}</code>` : ""}</${tag ? "a" : "span"}><div class="leaves">${peers(k, (INDEX.get(k) || []).filter(id => id !== c.id), pid).join("")}</div></div>`;
+  };
 
   const rels = [
-    ["requires", (c.requires || []).map(k => BY_KEY.get(k)).filter(i => i != null)],
-    ["ensures", (c.ensures || []).map(k => BY_KEY.get(k)).filter(i => i != null)],
-    ["requiredBy", REQUIRED_BY.get(c.key) || []],
-    ["ensuredBy", ENSURED_BY.get(c.key) || []],
-  ].filter(([, ids]) => ids.length);
-  const relBranch = rels.length ? [branch("rel", esc(t("relations")), rels.map(([k, ids], i) =>
-    `<div class="sub"><span class="tagpill" id="t-rel-${i}" data-wire="h-rel">${esc(t(k))}</span><div class="leaves">${ids.map(x => peer(VERIFICATIONS[x], `data-wire="t-rel-${i}"`)).join("")}</div></div>`))] : [];
-  const closest = rankPeers(c, VERIFICATIONS.map(o => o.id)).filter(p => p.score > 0);
+    ["requires", "requires", "diagramRequiresHint", (c.requires || []).map(k => BY_KEY.get(k)).filter(i => i != null)],
+    ["requiredBy", "← requires", "diagramRequiredByHint", REQUIRED_BY.get(c.key) || []],
+    ["ensures", "ensures", "diagramEnsuresHint", (c.ensures || []).map(k => BY_KEY.get(k)).filter(i => i != null)],
+    ["ensuredBy", "← ensures", "diagramEnsuredByHint", ENSURED_BY.get(c.key) || []],
+  ].filter(([, , , ids]) => ids.length);
+  // a relation pill names what it reads and the ledger kind on its own line
+  const relBranch = rels.length ? [branch("rel", esc(t("relations")), rels.map(([k, raw, tip, ids], i) =>
+    `<div class="sub relation"><span class="tagpill" id="t-rel-${i}" data-wire="h-rel" title="${esc(t(tip))}">${esc(t(k))}<code>${esc(raw)}</code></span><div class="leaves">${ids.map(x => peer(VERIFICATIONS[x], `data-wire="t-rel-${i}"`)).join("")}</div></div>`))] : [];
   const tags = knownTags(c);
   $("#right").innerHTML = [
     ...relBranch,
-    branch("closest", `${esc(t("closest"))} <span>${esc(t("byScore"))}</span>`, peers("closest", closest, "h-closest")),
-    branch("tags", `${esc(t("tags"))} <span>${fmt(tags.length)}</span>`, tags.map((tg, i) => sub("tag:" + tg, tagText(tg), tg, `t-tag-${i}`, "h-tags"))),
-    ...DERIVED.map(f => branch(f.key, esc(t(f.key)), [sub(f.key + ":" + c.f[f.key][0], c.f[f.key][0], c.f[f.key][0], `t-${f.key}`, `h-${f.key}`)])),
+    branch("tags", `${esc(t("tags"))}<span class="bnote">${fmt(tags.length)}</span>`, tags.map((tg, i) => sub("tag:" + tg, tagText(tg), tg, `t-tag-${i}`, "h-tags"))),
+    ...DERIVED.map(f => branch(f, esc(t(f)), [sub(f + ":" + c.f[f][0], c.f[f][0], c.f[f][0], `t-${f}`, `h-${f}`)])),
   ].join("");
+
+  // the rail keeps its own state; a redraw keeps the rest of the page as it is
+  const board = $(".board");
+  // the tag panel closes when the pointer leaves the button and the panel
+  const watchRail = () => { const w = $(".rfwrap"); if (w) w.onmouseleave = () => { if (rail.tagOpen) { rail.tagOpen = false; drawRail() } } };
+  const drawRail = () => { $("#rail").innerHTML = railInner(c); watchRail() };
+  const drawRailTree = () => { const el = $("#railtree"); if (el) el.innerHTML = railTree(c).html };
+  $("#rail").addEventListener("click", e => {
+    const b = e.target.closest("[data-rail-toggle],[data-rail-by],[data-rail-fold],[data-rail-more],[data-rail-go],[data-rail-tag],[data-rail-tagclear],[data-rail-filter]");
+    if (!b) return;
+    const d = b.dataset;
+    if ("railToggle" in d) { rail.open = !rail.open; board.dataset.rail = rail.open ? "open" : "closed"; drawRail(); scheduleWires(); return }
+    if (d.railBy) { rail.by = d.railBy; rail.fold = {}; rail.more = {}; drawRail(); return }
+    if (d.railGo) { location.hash = href(d.railGo); return }
+    // a fold remembers the state it left, not the state it would default to
+    if (d.railFold) { rail.fold[d.railFold] = b.getAttribute("aria-expanded") !== "true"; drawRailTree(); return }
+    if (d.railMore) { rail.more[d.railMore] = (rail.more[d.railMore] || RAIL_PAGE) + RAIL_PAGE; drawRailTree(); return }
+    if (d.railTag) {
+      rail.tags = rail.tags.includes(d.railTag) ? rail.tags.filter(x => x !== d.railTag) : [...rail.tags, d.railTag];
+      rail.fold = {}; rail.more = {}; drawRail();
+      const again = [...$("#rail").querySelectorAll("[data-rail-tag]")].find(x => x.dataset.railTag === d.railTag);
+      if (again) again.focus();
+      return;
+    }
+    if ("railTagclear" in d) { rail.tags = []; rail.fold = {}; rail.more = {}; drawRail(); return }
+    if ("railFilter" in d) { rail.tagOpen = !rail.tagOpen; drawRail(); return }
+  });
+  $("#rail").addEventListener("input", e => {
+    if (e.target.id !== "railq") return;
+    rail.q = e.target.value; rail.fold = {}; rail.more = {};
+    drawRailTree();
+  });
+  $("#rail").addEventListener("keydown", e => {
+    if (e.key === "Escape" && rail.tagOpen) { rail.tagOpen = false; drawRail(); $(".rfbtn")?.focus() }
+  });
+  watchRail();
 
   $("#mm").addEventListener("click", e => {
     const tg = e.target.closest("[data-toggle]"), m = e.target.closest("[data-more]");
-    if (tg) { const k = tg.dataset.toggle; mm.open[k] = mm.open[k] ? 0 : PAGE; render() }
+    if (e.target.closest("#detection-toggle")) {
+      mm.full = !mm.full;
+      render();
+      $("#detection-toggle")?.focus({ preventScroll: true });
+    } else if (tg) { const k = tg.dataset.toggle; mm.open[k] = mm.open[k] ? 0 : PAGE; render() }
     else if (m) { const k = m.dataset.more; mm.open[k] = (mm.open[k] || 0) + PAGE; render() }
   });
-  $(".trail").addEventListener("click", e => { const b = e.target.closest("button[data-key]"); if (b) location.hash = href(b.dataset.key) });
-  picker();
+  $(".record-basis").addEventListener("toggle", e => { mm.basis = e.target.open; scheduleWires() });
+  syncClamp();
+  for (const el of [$("#rail"), $("#mm"), core]) diagramResize.observe(el);
   syncStick();
   requestAnimationFrame(drawWires);
 }
 
-function picker() {
-  const input = $("#find"), box = $("#results");
-  let active = -1, shown = [];
-  const show = () => {
-    const q = input.value.trim().toLowerCase();
-    const all = VERIFICATIONS.filter(c => textMatch(c, q));
-    shown = all.slice(0, RESULT_LIMIT); active = shown.length ? 0 : -1;
-    box.innerHTML = `<div class="rcount">${esc(t("matchCount", fmt(all.length), fmt(VERIFICATIONS.length)))}${all.length > RESULT_LIMIT ? esc(t("firstShown", RESULT_LIMIT)) : ""}</div>` +
-      shown.map((c, i) => `<button type="button" class="res" role="option" id="r-${i}" data-key="${esc(c.key)}" aria-selected="${i === active}"><span class="dot" style="background:${hc(c)}"></span><span>${esc(titleOf(c))}<small>${esc(c.name)}</small></span></button>`).join("");
-    box.hidden = false; input.setAttribute("aria-expanded", "true");
-  };
-  const hide = () => { box.hidden = true; input.setAttribute("aria-expanded", "false") };
-  const go = k => { hide(); location.hash = href(k) };
-  input.addEventListener("input", show);
-  input.addEventListener("focus", show);
-  input.addEventListener("keydown", e => {
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault(); if (!shown.length) return;
-      active = (active + (e.key === "ArrowDown" ? 1 : -1) + shown.length) % shown.length;
-      box.querySelectorAll(".res").forEach((b, i) => b.setAttribute("aria-selected", i === active));
-      const el = $(`#r-${active}`); if (el) { el.scrollIntoView({ block: "nearest" }); input.setAttribute("aria-activedescendant", el.id) }
-    } else if (e.key === "Enter" && active >= 0) { e.preventDefault(); go(shown[active].key) }
-    else if (e.key === "Escape") hide();
-  });
-  box.addEventListener("mousedown", e => { const b = e.target.closest(".res"); if (b) { e.preventDefault(); go(b.dataset.key) } });
+// the detection is clamped to seven lines, and the toggle appears only when the
+// text really runs past them
+function syncClamp() {
+  const p = $("#detection"), b = $("#detection-toggle");
+  if (!p || !b) return;
+  const line = parseFloat(getComputedStyle(p).lineHeight) || 24;
+  p.classList.remove("clamped");
+  const over = p.scrollHeight > line * 7 + 1;
+  b.hidden = !over;
+  b.textContent = t(mm.full ? "diagramCollapse" : "diagramShowAll");
+  b.setAttribute("aria-expanded", String(mm.full));
+  if (over && !mm.full) p.classList.add("clamped");
 }
+
 document.addEventListener("mousedown", e => {
   if (!$("#langmenu").hidden && !e.target.closest(".menuwrap")) langMenu.close(false);
-  const box = $("#results");
-  if (box && !e.target.closest(".sbox")) { box.hidden = true; $("#find")?.setAttribute("aria-expanded", "false") }
 });
 
 function drawWires() {
   const wrap = $("#mm"), svg = $("#wires");
   if (!wrap || getComputedStyle(svg).display === "none") return;
-  const box = wrap.getBoundingClientRect(), paths = [];
+  const box = wrap.getBoundingClientRect(), core = $("#core").getBoundingClientRect(), paths = [];
   wrap.querySelectorAll("[data-wire]").forEach(el => {
     const from = document.getElementById(el.dataset.wire); if (!from) return;
     const a = from.getBoundingClientRect(), b = el.getBoundingClientRect();
+    if (b.top >= a.bottom - 1 && b.left < a.right && b.right > a.left) {
+      // stacked: a trunk in the indent gutter on the side facing the core, then an elbow into the child
+      const inward = core.left > a.left ? -1 : 1;
+      const x = (inward < 0 ? a.right : a.left) + inward * 9 - box.left, xe = (inward < 0 ? b.right : b.left) - box.left;
+      const y1 = a.bottom - box.top, y2 = b.top + Math.min(b.height / 2, 18) - box.top;
+      paths.push(`<path d="M${x},${y1} V${y2 - 6} Q${x},${y2} ${x + inward * 6},${y2} H${xe}"/>`);
+      return;
+    }
     const toRight = b.left >= a.right - 1;
     const x1 = (toRight ? a.right : a.left) - box.left, y1 = a.top + a.height / 2 - box.top;
     const x2 = (toRight ? b.left : b.right) - box.left, y2 = b.top + Math.min(b.height / 2, 18) - box.top;
@@ -476,98 +1129,22 @@ function drawWires() {
   });
   svg.innerHTML = paths.join("");
 }
-function syncStick() { const p = $("#picker"), w = $("#mm"); if (p && w) w.style.setProperty("--stick", `${p.getBoundingClientRect().height + 12}px`) }
+// the core follows the page while it fits; a card taller than the viewport
+// scrolls with it instead
+function syncStick() {
+  const c = $("#core");
+  if (c) c.classList.toggle("tall", c.getBoundingClientRect().height > window.innerHeight - 24);
+}
 let wireFrame = 0;
 const scheduleWires = () => { if (!wireFrame) wireFrame = requestAnimationFrame(() => { wireFrame = 0; syncStick(); drawWires() }) };
-window.addEventListener("resize", scheduleWires);
+const diagramResize = new ResizeObserver(scheduleWires);
+document.fonts.ready.then(scheduleWires);
+window.addEventListener("resize", () => { syncClamp(); scheduleWires() });
 window.addEventListener("scroll", scheduleWires, { passive: true });
-
-// ---- cost page ----
-const cost = { sort: store.get("costSort", "total"), units: 12, runs: 12 };
-function modeText(s) {
-  if (!s || !s.known) return t("modeUnknown");
-  if (s.effective_mode === "affected") return t("modeAffected");
-  if (s.effective_mode === "full") return t("modeFull");
-  return s.effective_mode || t("modeUnknown");
-}
-function runStatus(s) {
-  const parts = [];
-  if (s && s.known && !s.completed) parts.push(t("runIncomplete"));
-  if (s && s.outcome === "fail") parts.push(t("runFailed"));
-  return parts.length ? " · " + parts.map(esc).join(" · ") : "";
-}
-function costPage() {
-  const m = D.meta, gates = GATES.filter(g => m.attempts && m.attempts[g] != null).concat(GATES.filter(g => !(m.attempts && m.attempts[g] != null))).filter((g, i, a) => a.indexOf(g) === i);
-  const ordered = ["check", "commit", "push", "ci"].filter(g => gates.includes(g)).concat(gates.filter(g => !["check", "commit", "push", "ci"].includes(g)));
-  const gateTotal = g => VERIFICATIONS.reduce((s, c) => s + (c.stats?.by_gate[g] || 0), 0);
-  const gateTimed = g => VERIFICATIONS.reduce((s, c) => s + (c.stats?.by_gate_timed?.[g] || 0), 0);
-  const hits = VERIFICATIONS.reduce((s, c) => s + (c.stats?.hits || 0), 0);
-  const runsTotal = Object.values(m.attempts || {}).reduce((s, n) => s + n, 0);
-  const source = m.from ? t("source", when(m.from), when(m.to), fmt(runsTotal), ordered.filter(g => m.attempts[g] != null).map(g => `${g} ${fmt(m.attempts[g])}`).join(" · ")) : t("noRecords");
-  $("#page").innerHTML = `<div class="pagehead"><h1>${esc(t("costTitle"))}</h1><span class="note">${esc(source)}</span></div>
-    <div class="stats">${ordered.filter(g => m.attempts[g] != null).map(g => `<div class="stat card"><span>${esc(t("gateTotal", g))}</span><b class="num">${gateTimed(g) ? ms(gateTotal(g)) : "–"}</b></div>`).join("")}
-      <div class="stat card"><span>${esc(t("hitsTotal", fmt(VERIFICATIONS.length)))}</span><b class="num">${fmt(hits)}</b></div>
-      <div class="stat card"><span>${esc(t("unrecorded"))}</span><b class="num">${fmt(VERIFICATIONS.filter(c => !c.stats).length)}</b></div></div>
-    <section class="sechead"><h2>${esc(t("verificationsHead"))}</h2><span><label class="note" for="csort">${esc(t("sort"))}</label>
-      <select id="csort">${[["total", "sortTotal"], ["hits", "sortHits"], ["avg", "sortAvg"], ["runs", "sortRuns"]].map(([v, k]) =>
-        `<option value="${v}"${cost.sort === v ? " selected" : ""}>${esc(t(k))}</option>`).join("")}</select></span></section>
-    <div class="card scroll"><div style="min-width: 980px" id="costrows"></div></div>
-    <p class="note">${esc(t("costNote"))}</p>
-    <section style="display:flex;flex-direction:column;gap:10px"><h2>${esc(t("runsTitle"))}</h2><div class="card" id="runs"></div></section>
-    <div class="split">
-      <section style="flex: 3 1 520px"><h2>${esc(t("units"))}</h2><div class="card" id="units"></div></section>
-      <section style="flex: 2 1 360px"><h2>${esc(t("orphans"))}</h2><p class="note">${esc(t("orphanNote"))}</p><div class="card" id="orphans"></div></section>
-    </div>`;
-  const draw = () => {
-    const avg = c => c.stats?.timed ? c.stats.total_ms / c.stats.timed : -1;
-    const key = { total: c => -(c.stats?.total_ms ?? -1), hits: c => -(c.stats?.hits ?? -1), avg: c => -avg(c), runs: c => c.stats?.runs ?? Infinity }[cost.sort];
-    const rows = [...VERIFICATIONS].sort((a, b) => key(a) - key(b) || a.id - b.id);
-    const max = Math.max(1, ...VERIFICATIONS.map(c => c.stats?.total_ms || 0));
-    $("#costrows").innerHTML = `<div class="costrow head"><span>${esc(t("colImpact"))}</span><span class="r">${esc(t("colRuns"))}</span><span class="r">${esc(t("colHits"))}</span><span class="tothead">${esc(t("colTotal"))}<span class="legend">${ordered.map((g, i) => `<span><i style="background:${gateColor(i)}"></i>${esc(g)}</span>`).join("")}</span></span><span class="r">${esc(t("colAvg"))}</span></div>` +
-      rows.map(c => {
-        const s = c.stats, total = s?.total_ms || 0;
-        // one segment per gate, each scaled to the largest total, so length reads as time from history
-        const split = ordered.map((g, i) => `<span style="width:${(s?.by_gate[g] || 0) / max * 100}%;background:${gateColor(i)}"></span>`).join("");
-        const omit = !s && omissionsOf(c.key).length ? ` · ${esc(t("omitted"))}` : "";
-        const gateTitle = s ? esc(ordered.map(g => `${g} ${(s.by_gate_timed?.[g] ? ms(s.by_gate[g] || 0) : "–")}`).join(" · ")) : "";
-        return `<a class="costrow num" href="${href(c.key)}"><span class="what"><b>${esc(titleOf(c))}</b><span>${esc(c.name)}${omit}</span></span>
-          <span class="r">${s ? fmt(s.runs) : "–"}</span><span class="r">${s ? fmt(s.hits) : "–"}</span>
-          <span class="total"${s ? ` title="${gateTitle}"` : ""}><span class="bar">${split}</span><em>${s?.timed ? ms(total) : "–"}</em></span>
-          <span class="r">${s?.timed ? ms(avg(c)) : "–"}</span></a>`;
-      }).join("");
-    const runs = [...SELECTIONS].sort((a, b) => new Date(b.time) - new Date(a.time));
-    $("#runs").innerHTML = runs.length ? runs.slice(0, cost.runs).map(s => {
-      const sel = (s.selected || []).length, reg = s.registered ?? (s.eligible || []).length;
-      const state = !s.known ? "" : (reg === 0 ? t("emptyRegistry") : (sel === 0 && s.effective_mode === "affected" ? t("affectedZero") : t("registered", fmt(reg), fmt(sel))));
-      const detail = [s.base || s.head ? `base ${s.base || "–"} · head ${s.head || "–"}` : "", state,
-        (s.omissions || []).length ? `${t("colOmit")} ${fmt(s.omissions.length)}` : ""].filter(Boolean).join(" · ");
-      return `<div class="runrow"><span class="mono">${esc(when(s.time))} · ${esc(s.gate || "")}</span>
-        <span>${esc(modeText(s))}${s.requested_mode && s.requested_mode !== s.effective_mode ? esc(` (${s.requested_mode} → ${s.effective_mode})`) : ""}${s.fallback ? " · " + esc(t("fallback", s.fallback)) : ""}${s.revision_mismatch ? " · " + esc(t("revisionMismatch")) : ""}${runStatus(s)}</span>
-        <span class="note">${esc(detail)}</span></div>`;
-    }).join("") + (runs.length > cost.runs ? `<div class="morebar"><button type="button" class="btn" id="rmore">${esc(t("more", fmt(Math.min(12, runs.length - cost.runs)), fmt(runs.length - cost.runs)))}</button></div>` : "")
-      : `<p class="empty">${esc(t("runsEmpty"))}</p>`;
-    const invs = D.invocations || [], umax = Math.max(1, ...invs.map(v => v.total_ms));
-    $("#units").innerHTML = invs.length ? invs.slice(0, cost.units).map(v => `<div class="unitrow num"><span class="mono">${esc(v.unit || v.runner)}</span><span class="note">${esc(v.what)}</span><span class="r">${esc(t("times", fmt(v.runs)))}</span>
-        <span class="total"><span class="bar"><span style="width:${v.total_ms / umax * 100}%;background:var(--accent)"></span></span><em>${v.timed ? ms(v.total_ms) : "–"}</em></span></div>`).join("") +
-      (invs.length > cost.units ? `<div class="morebar"><button type="button" class="btn" id="umore">${esc(t("more", fmt(Math.min(12, invs.length - cost.units)), fmt(invs.length - cost.units)))}</button></div>` : "")
-      : `<p class="empty">${esc(t("noRecords"))}</p>`;
-    $("#orphans").innerHTML = (D.orphans || []).length ? D.orphans.map(o => {
-      const [runner, unit, ...name] = String(o.key).split(":");
-      return `<div class="orphan"><span class="mono">${esc(name.join(":"))}</span><span class="mono note">${esc(runner)} · ${esc(unit)}</span>
-        <span class="num">${esc(t("colRuns"))} <b>${fmt(o.runs)}</b> · ${esc(t("colHits"))} <b>${fmt(o.hits)}</b>${o.last_fail ? ` · ${esc(t("lastFail", when(o.last_fail), o.last_fail_gate))}` : ""}</span></div>`;
-    }).join("") : `<p class="empty">–</p>`;
-  };
-  draw();
-  $("#csort").addEventListener("change", e => { cost.sort = e.target.value; store.set("costSort", cost.sort); draw() });
-  $("#page").addEventListener("click", e => {
-    if (e.target.closest("#umore")) { cost.units += 12; draw() }
-    else if (e.target.closest("#rmore")) { cost.runs += 12; draw() }
-  });
-}
-const gateColor = i => ["var(--accent)", "var(--accent-2)", "var(--muted)", "var(--warn-fg)"][i] || "var(--muted)";
 
 // ---- vocabulary page ----
 function vocabularyPage() {
+  vp = null;
   const own = o => `<span class="own ${o}">${esc(t(o === "ytif" ? "ownYtif" : "ownProject"))}</span>`;
   const rows = GROUPS.flatMap(g => (g.tags || []).map((tg, i) => `<tr${i ? "" : ` class="first"`}>${i ? "" :
     `<td class="grp" rowspan="${g.tags.length}">${esc(groupTitle(g))}${groupSub(g) ? `<span>${esc(groupSub(g))}</span>` : ""}</td><td class="rule" rowspan="${g.tags.length}">${esc(t(g.exactly_one ? "ruleOne" : "ruleMany"))}</td>`}
@@ -580,9 +1157,12 @@ function vocabularyPage() {
 
 // ---- render ----
 function render() {
+  diagramResize.disconnect();
   const r = route();
+  // the diagram page runs edge to edge: its rail holds the left column
+  $("#page").className = r.page === "diagram" ? "diagram" : "";
   header(r);
-  ({ verifications: verificationsPage, checks: verificationsPage, diagram: diagramPage, cost: costPage, vocabulary: vocabularyPage })[r.page === "checks" ? "checks" : r.page](r);
+  ({ verifications: verificationsPage, diagram: diagramPage, vocabulary: vocabularyPage })[r.page](r);
 }
 window.addEventListener("hashchange", () => { render(); if (route().page === "diagram") window.scrollTo(0, 0) });
 render();

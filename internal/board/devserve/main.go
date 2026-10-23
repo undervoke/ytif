@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/undervoke/ytif/internal/board"
+	"github.com/undervoke/ytif/internal/cirecords"
 	"github.com/undervoke/ytif/internal/gitx"
 	"github.com/undervoke/ytif/internal/record"
 )
@@ -55,7 +56,19 @@ func render(assets fs.FS, root, common string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return board.Render(assets, root, lines, time.Now())
+	now := time.Now()
+	src := board.Sources{Local: lines}
+	if _, ok := cirecords.Origin(root); ok {
+		result, err := (cirecords.Client{Token: cirecords.Token()}).Sync(root, common, now)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "devserve: CI records: %v; showing cached records\n", err)
+		}
+		src.Remote, src.RemoteBranch, src.Status = result.Lines, result.Branch, &result.Status
+	}
+	if src.Branch, err = gitx.Branch(root); err != nil {
+		return nil, err
+	}
+	return board.Render(assets, root, src, now)
 }
 
 func fail(format string, a ...any) {

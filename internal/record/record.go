@@ -44,10 +44,18 @@ type Line struct {
 	Selection *Selection `json:"selection,omitempty"`
 }
 
+// CI artifact names. A CI workflow uploads the file under the artifact name,
+// and the board reads that artifact from the repository it names.
+const (
+	ArtifactName = "ytif-records"
+	ArtifactFile = "ytif-records.jsonl"
+)
+
 // Selection describes scheduling, not a claim about work spawned by a verifier.
 type Selection struct {
 	RequestedMode    string     `json:"requested_mode"`
 	EffectiveMode    string     `json:"effective_mode"`
+	Branch           string     `json:"branch,omitempty"` // empty when HEAD was detached
 	Base             string     `json:"base,omitempty"`
 	Head             string     `json:"head,omitempty"`
 	Fallback         string     `json:"fallback,omitempty"`
