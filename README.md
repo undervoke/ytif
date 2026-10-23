@@ -37,7 +37,9 @@ ytif init --hosts claude-code,codex
 
 Init needs a root `go.mod`. It pins ytif as a tool, creates the ledger and the
 exemptions, wires `ytif commit` and `ytif push` into lefthook and `ytif ci`
-into a GitHub workflow, and registers the agent guard for the selected hosts.
+into a GitHub workflow, and registers the agent guard for the selected hosts. <!-- dinyd: internal/initcmd/initcmd.go#Run s1:268a94cada7b997c -->
+In ytif's own repository, init registers the checkout's command for gates. <!-- dinyd: internal/initcmd/initcmd.go#pinStep s1:cc8001f009c097c4 -->
+Agent guards in this repository use the installed ytif release on PATH, keeping their executable independent of source edits. <!-- dinyd: internal/initcmd/initcmd.go#plan s1:af77baff63db28bd -->
 Run `lefthook install`, then follow the approval steps init prints for each
 host.
 
@@ -230,9 +232,11 @@ outside `ytif check`, registered by `ytif init` for the selected hosts:
 | Cursor | `.cursor/hooks.json`, `beforeShellExecution` |
 | Pi | `.pi/extensions/ytif-guard.ts` |
 
-The hooks and plugins run `go tool ytif`, so Go must be on the host's `PATH`,
-including hosts launched from a GUI. When it cannot start, the OpenCode, Kilo
-Code, and Pi plugins allow the command with a warning.
+Consumer-project hooks and plugins run `go tool ytif`, so Go must be on the
+host's `PATH`, including hosts launched from a GUI. This repository's guards
+use the installed release described under [Adopt](#adopt).
+When a guard cannot start, the OpenCode, Kilo Code, and Pi plugins allow the
+command with a warning.
 
 It refuses, directly or through a package manager:
 
