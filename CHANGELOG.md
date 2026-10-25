@@ -9,11 +9,14 @@ module proxy may already have cached that version.
 
 ### Added
 
+- `board.scales` sets the time bars' ticks in milliseconds, `verification` for single verifications and `unit` for unit, file, and process totals; each interval takes an equal width. The verification page's execution-unit rows extend the verification ticks tenfold until they cover the largest total.
 - Recording and `ytif board` delete closed local record files and dated CI artifacts older than 400 days or beyond 1 GiB, counted separately for local and CI records; the open file and undated artifacts can exceed these limits. `<git-common-dir>/ytif/storage.json` overrides the limits.
 
 ### Changed
 
 - Local records move to `<git-common-dir>/ytif/records/`. The previous `records.jsonl` still feeds statistics but is excluded from the limits and never deleted; remove it by hand once no older ytif writes it and its history is no longer needed.
+- The verification table and the diagram's cost bar use the diagram rail's time scales, and the table shows each verification's impact, runner, and short name above its bar; the full key moves to the expanded row.
+- The diagram rail labels execution units by file name and verifications by their short name.
 
 ## [0.12.0] - 2026-10-25
 

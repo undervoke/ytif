@@ -533,8 +533,20 @@ func ledgerText() string {
 #     days: %d  # how far back hits are counted
 #     last: {}  # per gate, count hits only in its latest N attempts, e.g. {commit: 50}
 #   recent_fail_days: %d  # how far back a fail marks a verification
+#   scales:  # time bar ticks in ms; each interval takes an equal width
+#     verification: %s
+#     unit: %s  # group and process totals
 verifications: []
-`, a[check.GateCheck], a[check.GateCommit], a[check.GatePush], a[check.GateCI], d.HitDays, d.RecentFailDays)
+`, a[check.GateCheck], a[check.GateCommit], a[check.GatePush], a[check.GateCI], d.HitDays, d.RecentFailDays, ticksText(d.Scales.Verification), ticksText(d.Scales.Unit))
+}
+
+// ticksText writes ticks as a YAML flow list.
+func ticksText(ticks []int64) string {
+	parts := make([]string, len(ticks))
+	for i, v := range ticks {
+		parts[i] = strconv.FormatInt(v, 10)
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 func skeleton(root, rel, text string) (file, error) {

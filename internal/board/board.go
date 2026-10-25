@@ -193,6 +193,12 @@ type criteriaOut struct {
 	Average        map[string]int `json:"average"`
 	Hits           hitWindowOut   `json:"hits"`
 	RecentFailDays int            `json:"recent_fail_days"`
+	Scales         scalesOut      `json:"scales"`
+}
+
+type scalesOut struct {
+	Unit         []int64 `json:"unit"`
+	Verification []int64 `json:"verification"`
 }
 
 type hitWindowOut struct {
@@ -243,7 +249,7 @@ func build(repo string, inv inventory.Inventory, src Sources, now time.Time) boa
 	d := boardData{
 		Meta: metaOut{
 			Repo: repo, Version: inv.Version, Generated: now.UTC(), Branch: src.Branch,
-			Criteria:     criteriaOut{Average: settings.Average, Hits: hitWindowOut{Days: settings.HitDays, Last: settings.HitLast}, RecentFailDays: settings.RecentFailDays},
+			Criteria:     criteriaOut{Average: settings.Average, Hits: hitWindowOut{Days: settings.HitDays, Last: settings.HitLast}, RecentFailDays: settings.RecentFailDays, Scales: scalesOut{Unit: settings.Scales.Unit, Verification: settings.Scales.Verification}},
 			Local:        spanOf(local),
 			LocalStorage: src.LocalStorage,
 		},

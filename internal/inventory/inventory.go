@@ -55,6 +55,16 @@ type BoardConfig struct {
 	Average        GateCounts `yaml:"average,omitempty"`
 	Hits           HitWindow  `yaml:"hits,omitempty"`
 	RecentFailDays int        `yaml:"recent_fail_days,omitempty"`
+	Scales         Scales     `yaml:"scales,omitempty"`
+}
+
+// Scales are the tick values, in milliseconds, that the board's time bars
+// are drawn against: each interval between neighbors takes an equal width.
+// Unit draws group and process totals; verification draws single
+// verifications.
+type Scales struct {
+	Unit         []int64 `yaml:"unit,omitempty"`
+	Verification []int64 `yaml:"verification,omitempty"`
 }
 
 // GateCounts counts something per gate. Strict decoding rejects a misnamed
@@ -79,6 +89,7 @@ type Settings struct {
 	HitDays        int            // how far back a hit is counted
 	HitLast        map[string]int // gate → latest attempts a hit is counted in
 	RecentFailDays int            // how far back a fail marks a verification
+	Scales         Scales         // time bar ticks
 }
 
 // Defaults for the board windows.
@@ -89,11 +100,23 @@ const (
 	defaultFailDays  = 30
 )
 
+// Default time bar ticks: 0 to 1,000s for a verification, 0 to 10,000s for a total.
+var (
+	defaultVerificationScale = []int64{0, 100, 1_000, 10_000, 100_000, 1_000_000}
+	defaultUnitScale         = []int64{0, 10_000, 100_000, 1_000_000, 10_000_000}
+)
+
 // Settings resolves the board windows. An unset average is 100 timed samples
 // per gate and 10 for ci, an unset hit window 365 days, an unset per-gate hit
 // limit counts every attempt, and an unset fail window 30 days.
 func (b BoardConfig) Settings() Settings {
-	s := Settings{Average: map[string]int{}, HitDays: b.Hits.Days, HitLast: map[string]int{}, RecentFailDays: b.RecentFailDays}
+	s := Settings{Average: map[string]int{}, HitDays: b.Hits.Days, HitLast: map[string]int{}, RecentFailDays: b.RecentFailDays, Scales: b.Scales}
+	if len(s.Scales.Verification) == 0 {
+		s.Scales.Verification = defaultVerificationScale
+	}
+	if len(s.Scales.Unit) == 0 {
+		s.Scales.Unit = defaultUnitScale
+	}
 	for gate, n := range b.Average.byGate() {
 		if n == 0 {
 			n = defaultAverage
@@ -147,6 +170,20 @@ func (b BoardConfig) validate() error {
 	}
 	if b.RecentFailDays < 0 {
 		return fmt.Errorf("recent_fail_days %d: want 0 or more", b.RecentFailDays)
+	}
+	// a bar position divides by each interval, so ticks must rise
+	for name, ticks := range map[string][]int64{"unit": b.Scales.Unit, "verification": b.Scales.Verification} {
+		if len(ticks) == 0 {
+			continue
+		}
+		if len(ticks) < 2 || ticks[0] < 0 {
+			return fmt.Errorf("scales: %s %v: want two or more ticks from 0 or more", name, ticks)
+		}
+		for i := 1; i < len(ticks); i++ {
+			if ticks[i] <= ticks[i-1] {
+				return fmt.Errorf("scales: %s %v: want rising ticks", name, ticks)
+			}
+		}
 	}
 	return nil
 }

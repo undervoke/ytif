@@ -186,6 +186,17 @@ const gatesOf = c => Array.isArray(c.gates) ? c.gates : [];
 const BY_KEY = new Map(VERIFICATIONS.map((c, i) => [c.key, i]));
 const componentOf = unit => String(unit || "").split("/").slice(0, 2).join("/") || ".";
 const titleOf = c => c.impact || (c.is_command && Array.isArray(c.run) ? c.run.join(" ") : "") || c.name;
+// shortName is the part of a verification's name that tells it apart in a
+// list: a JS test's own title, a .NET test's method; the key keeps the rest.
+function shortName(c) {
+  const n = String(c.name || "");
+  if (n.includes(" > ")) return n.slice(n.lastIndexOf(" > ") + 3);
+  if (c.runner !== "dotnet-test") return n;
+  const head = n.indexOf("(") < 0 ? n : n.slice(0, n.indexOf("("));
+  return n.slice(head.lastIndexOf(".") + 1);
+}
+// breakable lets an identifier wrap only after its own separators
+const breakable = (s, seps) => esc(s).replace(seps, "$&<wbr>");
 VERIFICATIONS.forEach((c, i) => {
   c.id = i;
   c.gates = gatesOf(c);
@@ -390,7 +401,6 @@ $("#langmenu").addEventListener("keydown", e => {
 // shows the same list. The expanded row is page state only.
 const list = { q: "", shown: 50, filterOpen: false, fileFind: "", procFind: "", expanded: undefined };
 const opened = new Set(); // expanded ledger files: the root and the selection's ancestors start open
-const TICKS = [{ at: "0%", label: "10ms" }, { at: "20%", label: "100ms" }, { at: "40%", label: "1s" }, { at: "60%", label: "10s" }, { at: "80%", label: "100s" }, { at: "100%", label: "1,000s" }];
 let vp = null; // the state of the verifications page currently on screen: { st, f, draw }
 
 // filterGroups describes every filter row: its key, its label, and one entry
@@ -657,18 +667,6 @@ function unitRows(kept) {
 
 const chev = open => `<span class="chev"><svg viewBox="0 0 12 12" aria-hidden="true" style="transform:rotate(${open ? 90 : 0}deg)"><path d="M4.5 2.5 L8 6 L4.5 9.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
 
-// barCell draws the row's average sum on a log scale from 10ms to 1,000s, split
-// into the gates' shares.
-function barCell(r) {
-  const sum = sumOf(r);
-  const len = sum > 0 ? Math.min(100, Math.max(0, ((Math.log10(sum) - 1) / 5) * 100)) : 0;
-  const segs = GATES.map(g => {
-    const v = r.means?.[g]?.ms || 0;
-    return v > 0 ? `<span style="width:${(v / sum) * len}%;background:${gateColor(g)}"></span>` : "";
-  }).join("");
-  return `<span class="bar"><span class="logbar">${segs}</span><em>${sampled(r) ? ms(sum) : "–"}</em></span>`;
-}
-
 // gateCell shows the gate's mean, or – when the row has no sample there or is
 // not a member, followed by the gate's hits, which outlast membership.
 function gateCell(r, g) {
@@ -682,6 +680,7 @@ function detailHTML(c) {
   return `<div class="vdetail">
     <div class="texts">${rows.map(([k, v]) => `<span${k === "diagramImpact" ? ` class="impact"` : ""}><b>${esc(t(k))}</b><span>${esc(v || "–")}</span></span>`).join("")}</div>
     <div class="side"><b>${esc(t("tags"))}</b>${tagRows(c) || `<span class="note">–</span>`}<a href="${href(c.key)}">${esc(t("openDiagram"))}</a></div>
+    <div class="vloc"><b>${esc(t("location"))}</b><code>${breakable(c.key, /[:/.]/g)}</code></div>
   </div>`;
 }
 
@@ -692,18 +691,26 @@ function drawRows(st, rows) {
     box.innerHTML = `<p class="empty">${esc(text)}</p>`;
     return;
   }
-  const head = `<div class="vhead"><span></span><span>${esc(st.view === "process" ? t("colWhat") : st.group === "unit" ? t("colUnit") : t("colImpact"))}</span>
-    <span class="ticks"><span>${esc(t("colAvg"))}</span><span class="track">${TICKS.map(k => `<span style="left:${k.at}">${esc(k.label)}</span>`).join("")}</span></span>
+  const head = `<div class="vhead"><span></span><span>${esc(st.view === "process" ? t("colWhat") : st.group === "unit" ? t("colUnit") : t("colImpact"))} / ${esc(t("colAvg"))}</span>
     ${GATES.map(g => `<span class="r">${esc(g)}</span>`).join("")}</div>`;
   const shown = rows.slice(0, list.shown);
   const individual = st.view === "verifications" && st.group === "verification";
+  // the bars use the diagram rail's scales: an execution unit sums its rows
+  // an execution unit's ticks grow tenfold past the verification ticks to fit
+  // the largest total; a process is a total; a verification uses its own ticks
+  const scale = st.view === "process" ? SUM_TICKS
+    : st.group === "unit" ? coverTicks(ROW_TICKS, Math.max(0, ...rows.map(sumOf))) : ROW_TICKS;
   const body = shown.map(r => {
     const title = individual ? titleOf(r) : r.title;
     const keyline = individual ? r.key : r.keyline;
-    const cells = `<span class="what"><b>${esc(title)}</b><code>${esc(keyline)}</code></span>${barCell(r)}${GATES.map(g => gateCell(r, g)).join("")}`;
+    // a verification names its runner and its own name; the full key waits in the detail
+    const second = individual
+      ? `<span class="vname"><span class="runner">${esc(r.runner)}</span><code>${breakable(shortName(r), /[_/]/g)}</code></span>`
+      : `<code>${esc(keyline)}</code>`;
+    const cells = `<span class="what"><b>${esc(title)}</b>${second}${barHTML(timeBar([r], scale))}</span>${GATES.map(g => gateCell(r, g)).join("")}`;
     if (!individual) return `<div class="vrow plain"><span></span>${cells}</div>`;
     const open = list.expanded === r.key;
-    return `<div class="vitem"><button type="button" class="vrow" data-open="${esc(r.key)}" aria-expanded="${open}">${chev(open)}${cells}</button>${open ? detailHTML(r) : ""}</div>`;
+    return `<div class="vitem"><button type="button" class="vrow" data-open="${esc(r.key)}" title="${esc(r.key)}" aria-expanded="${open}">${chev(open)}${cells}</button>${open ? detailHTML(r) : ""}</div>`;
   }).join("");
   const rest = rows.length - shown.length;
   box.innerHTML = head + body + (rest > 0 ? `<div class="morebar"><button type="button" class="btn" id="more">${esc(t("more", fmt(Math.min(50, rest)), fmt(rest)))}</button></div>` : "");
@@ -845,6 +852,8 @@ const rail = { open: true, by: "file", q: "", tags: [], tagOpen: false, fold: {}
 // origin line when it carries none
 const fileOf = c => c.file || String(c.origin || "").split(": ")[0];
 const shortUnit = u => String(u || ".").split("/").slice(-2).join("/");
+// a rail unit is its file name when it is a file, else its last two directories
+const railUnit = u => { const base = String(u || ".").split("/").pop(); return base.includes(".") ? base : shortUnit(u) };
 
 // A row matches the search by the fields the list search reads, and the tag
 // filter by any chosen tag within its group, with every chosen group taken.
@@ -856,32 +865,44 @@ const railTagHit = (c, except) => GROUPS.every(g => g.name === except ||
   !rail.tags.some(tg => TAG[tg] && TAG[tg].group === g.name) ||
   rail.tags.some(tg => TAG[tg] && TAG[tg].group === g.name && c.tags.includes(tg)));
 
-// A time bar prints its scale inside the track and its fill covers the scale;
-// the value sits inside the filled end when it fits, and just past it otherwise,
-// where it takes the first scale label's place. A scale label shows only while
-// neither the fill nor the value reaches it. A row's scale runs from 100ms to
-// 1,000s; a group sums its rows' averages on a scale from 10s to 10,000s.
-const ROW_SCALE = { lo: 2, span: 4, ticks: ["1s", "10s", "100s", "1,000s"] };
-const SUM_SCALE = { lo: 4, span: 3, ticks: ["100s", "1,000s", "10,000s"] };
-const scaleRight = (i, span) => i === span ? "3px" : `calc(${(((span - i) / span) * 100).toFixed(2)}% + 3px)`;
+// A time bar prints its ticks inside the track and its fill covers them; the
+// value sits inside the filled end when it fits, and just past it otherwise,
+// where it takes the first tick label's place. A tick label shows only while
+// neither the fill nor the value reaches it. The ticks come from the ledger's
+// board scales (ms): every interval between neighbors takes an equal width,
+// and a value past the last tick fills the bar. A verification uses
+// ROW_TICKS; group and process totals use SUM_TICKS.
+const ROW_TICKS = CRITERIA.scales?.verification || [0, 100, 1000, 10000, 100000, 1000000];
+const SUM_TICKS = CRITERIA.scales?.unit || [0, 10000, 100000, 1000000, 10000000];
+// coverTicks extends ticks tenfold until the last one reaches max
+const coverTicks = (ticks, max) => { const out = [...ticks]; while (out[out.length - 1] < max) out.push(out[out.length - 1] * 10); return out; };
+function tickPos(v, ticks) {
+  const n = ticks.length - 1;
+  if (v <= ticks[0]) return 0;
+  for (let i = 1; i <= n; i++) if (v <= ticks[i]) return (i - 1 + (v - ticks[i - 1]) / (ticks[i] - ticks[i - 1])) / n;
+  return 1;
+}
+const scaleRight = (i, n) => i === n ? "3px" : `calc(${(((n - i) / n) * 100).toFixed(2)}% + 3px)`;
 // the fill covers the scale, so the value takes the ink of the segment under it
 const BAR_INK = { check: "var(--ink-check)", commit: "var(--ink-commit)", push: "var(--ink-push)", ci: "var(--ink-ci)" };
-function timeBar(byGate, scale) {
-  const total = GATES.reduce((s, g) => s + (byGate[g] || 0), 0), has = total > 0;
-  const len = has ? Math.min(1, Math.max(0, (Math.log10(total) - scale.lo) / scale.span)) : 0;
+// a sampled 0ms is a time; only rows without samples read as empty
+function timeBar(rows, ticks) {
+  const byGate = gateMs(rows), total = GATES.reduce((s, g) => s + byGate[g], 0), has = rows.some(sampled);
+  const len = has ? tickPos(total, ticks) : 0, n = ticks.length - 1;
   const used = GATES.filter(g => byGate[g] > 0), pct = (len * 100).toFixed(2) + "%", inside = len >= 0.17;
   return {
     segs: used.map(g => ({ color: gateColor(g), width: (len * byGate[g] / total * 100).toFixed(2) + "%" })),
     sum: has ? ms(total) : t("noTimeSamples"),
     left: inside ? "auto" : pct, right: inside ? `calc(100% - ${pct})` : "auto",
     ink: !has ? "var(--muted)" : inside ? BAR_INK[used[used.length - 1]] : "var(--fg)",
-    ticks: scale.ticks.map((label, i) => ({ label, at: i + 1 }))
-      .filter(k => has && k.at / scale.span * 100 - 12 >= len * 100 + (inside ? 0 : 18))
-      .map(k => ({ label: k.label, right: scaleRight(k.at, scale.span) })),
+    step: (100 / n).toFixed(3) + "%",
+    ticks: ticks.slice(1).map((v, i) => ({ label: ms(v), at: i + 1 }))
+      .filter(k => has && k.at / n * 100 - 12 >= len * 100 + (inside ? 0 : 18))
+      .map(k => ({ label: k.label, right: scaleRight(k.at, n) })),
   };
 }
 const gateMs = rows => Object.fromEntries(GATES.map(g => [g, rows.reduce((s, c) => s + (c.means?.[g]?.ms || 0), 0)]));
-const barHTML = (b, kind) => `<span class="tbar ${kind}">${b.ticks.map(k => `<span class="tick" style="right:${k.right}">${esc(k.label)}</span>`).join("")}<span class="segs">${b.segs.map(s => `<span style="width:${s.width};background:${s.color}"></span>`).join("")}</span><span class="value" style="left:${b.left};right:${b.right};color:${b.ink}">${esc(b.sum)}</span></span>`;
+const barHTML = b => `<span class="tbar" style="--step:${b.step}">${b.ticks.map(k => `<span class="tick" style="right:${k.right}">${esc(k.label)}</span>`).join("")}<span class="segs">${b.segs.map(s => `<span style="width:${s.width};background:${s.color}"></span>`).join("")}</span><span class="value" style="left:${b.left};right:${b.right};color:${b.ink}">${esc(b.sum)}</span></span>`;
 const railChev = `<span class="rchev" aria-hidden="true"><svg><use href="#i-chevron"/></svg></span>`;
 
 // railTree draws the list and counts what it shows. A heading folds like a
@@ -905,22 +926,22 @@ function railTree(cur) {
   const out = [`<div class="rpad"></div>`];
   const row = (c, text, ind) => {
     const on = c === cur;
-    return `<button type="button" role="treeitem" aria-current="${on}" title="${esc(c.name + " — " + titleOf(c))}" data-rail-go="${esc(c.key)}" class="rrow" style="padding-left:${ind}"><span class="rname"><span class="dot" style="background:${hc(c)}"></span><span>${esc(text)}</span></span>${barHTML(timeBar(gateMs([c]), ROW_SCALE), "row")}</button>`;
+    return `<button type="button" role="treeitem" aria-current="${on}" title="${esc(c.key + " — " + titleOf(c))}" data-rail-go="${esc(c.key)}" class="rrow" style="padding-left:${ind}"><span class="rname"><span class="dot" style="background:${hc(c)}"></span><span class="mono">${esc(text)}</span></span>${barHTML(timeBar([c], ROW_TICKS))}</button>`;
   };
   const sep = (inset, weight, tone) => `<div class="rsep" aria-hidden="true" style="height:${weight};margin-left:${inset};background:${tone}"></div>`;
   for (const a of [...tree.keys()].sort()) {
     const m = tree.get(a), all = [...m.values()].flat(), hk = rail.by + "|" + a;
     const open = rail.fold[hk] ?? (all.includes(cur) || (filtering && shown <= RAIL_FILTER_OPEN));
-    out.push(`<button type="button" aria-expanded="${open}" title="${esc(a)}" data-rail-fold="${esc(hk)}" class="rheadrow">${railChev}<span class="rheadtext">${esc(a)}</span><span class="rcount">${fmt(all.length)}</span></button><div class="rbar">${barHTML(timeBar(gateMs(all), SUM_SCALE), "sum")}</div>`);
+    out.push(`<button type="button" aria-expanded="${open}" title="${esc(a)}" data-rail-fold="${esc(hk)}" class="rheadrow">${railChev}<span class="rheadtext">${esc(a)}</span><span class="rcount">${fmt(all.length)}</span></button><div class="rbar">${barHTML(timeBar(all, SUM_TICKS))}</div>`);
     if (!open) continue;
     for (const b of [...m.keys()].sort()) {
       const rows = m.get(b), gk = hk + "|" + b;
       if (b === "") { for (const c of rows) out.push(row(c, c.name + (c.unit && c.unit !== "." ? " · " + c.unit : ""), "22px")); continue }
       const isOpen = rail.fold[gk] ?? (rows.includes(cur) || (filtering && shown <= RAIL_FILTER_OPEN));
-      out.push(`<button type="button" aria-expanded="${isOpen}" title="${esc(b)}" data-rail-fold="${esc(gk)}" class="rgroup">${railChev}<span class="runit">${esc(shortUnit(b))}</span><span class="rcount">${fmt(rows.length)}</span></button><div class="rbar unit">${barHTML(timeBar(gateMs(rows), SUM_SCALE), "sum")}</div>`);
+      out.push(`<button type="button" aria-expanded="${isOpen}" title="${esc(b)}" data-rail-fold="${esc(gk)}" class="rgroup">${railChev}<span class="runit">${esc(railUnit(b))}</span><span class="rcount">${fmt(rows.length)}</span></button><div class="rbar unit">${barHTML(timeBar(rows, SUM_TICKS))}</div>`);
       if (!isOpen) continue;
       const n = rail.more[gk] || RAIL_PAGE;
-      for (const c of rows.slice(0, n)) out.push(row(c, c.name.split(" > ").pop(), "38px"));
+      for (const c of rows.slice(0, n)) out.push(row(c, shortName(c), "38px"));
       if (rows.length > n) out.push(`<button type="button" class="rmore" data-rail-more="${esc(gk)}">${esc(t("moreLeft", fmt(Math.min(RAIL_PAGE, rows.length - n)), fmt(rows.length - n)))}</button>`);
       // an opened unit ends with a rule indented to its rows, an opened file with one indented to its units
       out.push(sep("38px", "2px", "var(--line)"));
@@ -1014,7 +1035,7 @@ function diagramPage(r) {
   const processID = `unit:${c.runner}:${c.unit}`;
   const processNode = PROC_NODES.find(n => n.id === processID) || PROC_NODES.find(n => n.id === "runner:" + c.runner) || PROC_NODES[0];
   const costLeaves = [
-    `<div class="leaf costbar" data-wire="h-cost"><b>${esc(t("colAvg"))}</b>${barCell(c)}<span class="costticks" aria-hidden="true">${TICKS.map(tk => `<span style="left:${tk.at}">${tk.label}</span>`).join("")}</span></div>`,
+    `<div class="leaf costbar" data-wire="h-cost"><b>${esc(t("colAvg"))}</b>${barHTML(timeBar([c], ROW_TICKS))}</div>`,
     `<div class="leaf costgates" data-wire="h-cost">${GATES.map(g => {
       const m = c.means?.[g];
       const tip = m ? t("diagramSamples", fmt(m.k)) : t(c.gates.includes(g) ? "diagramNoSample" : "diagramNotMember");

@@ -238,7 +238,7 @@ credentials, a network, or any artifact, the page renders the cached records
 and names on the source line why the sync stopped.
 
 A gate's time is the sum of its current members' means. <!-- dinyd: internal/board/board.go#summarize s1:824cf197241d735e -->
-Each mean uses the last N timed results of that verification at that gate. <!-- dinyd: internal/board/board.go#aggregate s1:a73be260f7500632 --> <!-- dinyd: internal/board/board.go#meansOf s1:23e869a0e30312a9 --> <!-- dinyd: internal/board/board.go#build s1:4569ceeefde16f07 -->
+Each mean uses the last N timed results of that verification at that gate. <!-- dinyd: internal/board/board.go#aggregate s1:a73be260f7500632 --> <!-- dinyd: internal/board/board.go#meansOf s1:23e869a0e30312a9 --> <!-- dinyd: internal/board/board.go#build s1:68d936777861b1d0 -->
 A fail counts as one hit; later fails of that verification at that gate count again only after a pass. <!-- dinyd: internal/record/hits.go#Hits s1:d5b7e4a02af8b181 -->
 Hits are counted over the last `days` days, with an optional latest-attempt limit per gate. <!-- dinyd: internal/board/board.go#window s1:374dbfd9604443da -->
 Only the root ledger sets the windows:
@@ -248,12 +248,16 @@ board:
   average: {check: 100, commit: 100, push: 100, ci: 10}
   hits: {days: 365, last: {commit: 50}}
   recent_fail_days: 30
+  scales:
+    verification: [0, 100, 1000, 10000, 100000, 1000000]
+    unit: [0, 10000, 100000, 1000000, 10000000]
 ```
 
-An omitted value keeps the default: 100 timed results per gate, 10 for ci, 365 hit days, and 30 fail days. <!-- dinyd: internal/inventory/inventory.go#BoardConfig.Settings s1:7ce682f4dee67c4a --> <!-- dinyd: internal/inventory/inventory.go#defaultAverage s1:47f8d6f4c819e8af --> <!-- dinyd: internal/inventory/inventory.go#defaultCIAverage s1:7175079900b572ce --> <!-- dinyd: internal/inventory/inventory.go#defaultHitDays s1:afc36fd3bd525bdc --> <!-- dinyd: internal/inventory/inventory.go#defaultFailDays s1:7b525bc396a5ec4f -->
+An omitted value keeps the default: 100 timed results per gate, 10 for ci, 365 hit days, and 30 fail days. <!-- dinyd: internal/inventory/inventory.go#BoardConfig.Settings s1:19a1f69995b9ad43 --> <!-- dinyd: internal/inventory/inventory.go#defaultAverage s1:47f8d6f4c819e8af --> <!-- dinyd: internal/inventory/inventory.go#defaultCIAverage s1:7175079900b572ce --> <!-- dinyd: internal/inventory/inventory.go#defaultHitDays s1:afc36fd3bd525bdc --> <!-- dinyd: internal/inventory/inventory.go#defaultFailDays s1:7b525bc396a5ec4f -->
 `hits.last` counts a gate's hits only in its latest N attempts; leave it out to count every attempt inside the days.
 `recent_fail_days` is how far back a fail marks a verification as recently failed. <!-- dinyd: internal/board/board.go#flags s1:0e0a093f81108c3b -->
-A ledger `ytif init` creates lists these keys and their defaults as a comment. <!-- dinyd: internal/initcmd/initcmd.go#ledgerText s1:b5a85e55d252b42a -->
+`scales` lists the time bars' ticks in milliseconds, each interval taking an equal width: `verification` draws single verifications, `unit` draws unit, file, and process totals, and the verification page's execution-unit rows extend `verification` tenfold until their largest total fits. <!-- dinyd: internal/inventory/inventory.go#Scales s1:8e1feca08d139295 -->
+A ledger `ytif init` creates lists these keys and their defaults as a comment. <!-- dinyd: internal/initcmd/initcmd.go#ledgerText s1:b000a271bf09950a -->
 
 ## Agent guard
 
