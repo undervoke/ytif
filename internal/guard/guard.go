@@ -89,7 +89,7 @@ func runHook(stdin io.Reader, stdout, stderr io.Writer, cursor bool) {
 	}
 	common, err := g.commonDir()
 	if err == nil {
-		err = recordRefusal(common, runner, command)
+		err = recordRefusal(common, runner, command, stderr)
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "(YTiF) refusal not recorded: %v\n", err)
@@ -275,13 +275,13 @@ func commonDir(cwd string) (string, error) {
 	return gitx.CommonDir(root)
 }
 
-// recordRefusal appends a guard line to the repository's local records.
-func recordRefusal(commonDir, runner, command string) error {
+// recordRefusal appends a guard line to the repository's managed records.
+func recordRefusal(commonDir, runner, command string, warn io.Writer) error {
 	if len(command) > 500 {
 		command = command[:500] + "…"
 	}
-	return record.Append(record.DefaultPath(commonDir), []record.Line{{
+	return record.AppendManaged(commonDir, []record.Line{{
 		Time: time.Now().UTC(), Attempt: record.NewAttempt(), Kind: record.KindGuard,
 		Runner: path.Base(strings.Fields(runner)[0]), Detail: fmt.Sprintf("%s: %s", runner, command),
-	}})
+	}}, warn)
 }

@@ -19,12 +19,12 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/undervoke/ytif/internal/gitx"
 	"github.com/undervoke/ytif/internal/record"
+	"github.com/undervoke/ytif/internal/storage"
 )
 
 const (
@@ -70,10 +70,11 @@ func (r Repo) String() string { return r.Owner + "/" + r.Name }
 // catalog last refreshed, how many artifacts still wait, and why the last
 // sync stopped early.
 type Status struct {
-	Repo    string    // owner/name
-	Synced  time.Time // last catalog refresh; zero when never
-	Pending int       // artifacts catalogued but not downloaded
-	Kind    string    // "" when the sync finished
+	Repo    string       // owner/name
+	Synced  time.Time    // last catalog refresh; zero when never
+	Pending int          // artifacts catalogued but not downloaded
+	Kind    string       // "" when the sync finished
+	Storage storage.Pool // retention pool for this repo's CI cache
 }
 
 // Result is what one sync leaves the board: the cached record lines, each CI
@@ -160,12 +161,45 @@ func (c Client) Sync(root, commonDir string, now time.Time) (Result, error) {
 		return Result{}, fmt.Errorf("origin is not a %s repository", Host)
 	}
 	dir := CacheDir(commonDir, repo)
-	st, err := loadState(dir)
-	s := &syncer{client: c, repo: repo, dir: dir, st: st, now: now}
+	lk, err := storage.Lock(ciCacheLockPath(commonDir), false)
 	if err != nil {
-		s.problems = append(s.problems, err)
+		return cachedSnapshot(commonDir, repo, dir, now, fmt.Errorf("ci-cache lock: %w", err))
 	}
-	err = s.sync()
+	defer storage.Unlock(lk)
+	ctl, legacy, ctlErr := loadControl(dir)
+	s := &syncer{
+		client: c, repo: repo, dir: dir, commonDir: commonDir,
+		st: legacy, ctl: ctl, ctlValid: ctlErr == nil,
+		now: now,
+	}
+	if ctlErr != nil {
+		s.problems = append(s.problems, fmt.Errorf("ci control: %w; destructive cleanup deferred", ctlErr))
+	}
+	s.mergeLegacy()
+	if s.ctlValid {
+		err = saveControl(s.dir, s.ctl)
+		if err == nil {
+			err = s.sync()
+		} else {
+			s.ctlValid = false
+		}
+	}
+	policy, policyErr := storage.Load(commonDir)
+	s.policy, s.policyValid = policy, policyErr == nil
+	if policyErr != nil {
+		s.problems = append(s.problems, fmt.Errorf("storage policy: %w; destructive cleanup deferred", policyErr))
+	}
+	gcStart := len(s.problems)
+	s.runGC()
+	if gcErr := errors.Join(s.problems[gcStart:]...); gcErr != nil {
+		s.pool.Error = gcErr.Error()
+		if saveErr := storage.UpdateReceipt(commonDir, "ci", ciKey(commonDir, dir), policy, s.pool); saveErr != nil {
+			s.problems = append(s.problems, saveErr)
+		}
+	}
+	if s.pool.Overage > 0 {
+		s.problems = append(s.problems, fmt.Errorf("CI record storage exceeds its budget by %d bytes", s.pool.Overage))
+	}
 	lines, branch := s.read()
 	return Result{Lines: lines, Branch: branch, Status: s.status()}, errors.Join(append([]error{err}, s.problems...)...)
 }
@@ -173,13 +207,19 @@ func (c Client) Sync(root, commonDir string, now time.Time) (Result, error) {
 // syncer is one Sync call: the cache it works on, the failure that stopped it,
 // and the problems it went on past.
 type syncer struct {
-	client   Client
-	repo     Repo
-	dir      string
-	st       state
-	now      time.Time
-	kind     string
-	problems []error
+	client      Client
+	repo        Repo
+	dir         string
+	commonDir   string
+	st          state // legacy index, read-only migration input; never written
+	ctl         control
+	ctlValid    bool
+	policy      storage.Policy
+	policyValid bool
+	now         time.Time
+	kind        string
+	problems    []error
+	pool        storage.Pool
 }
 
 func (s *syncer) sync() error {
@@ -187,15 +227,15 @@ func (s *syncer) sync() error {
 		s.kind = StatusNoCredentials
 		return errors.New("no credentials: set GH_TOKEN or GITHUB_TOKEN, or run gh auth login")
 	}
-	if s.st.Refreshed.IsZero() || s.now.Sub(s.st.Refreshed) >= catalogTTL {
-		pages, err := s.client.catalog(s.repo, s.st.Pages)
+	if s.ctl.Refreshed.IsZero() || s.now.Sub(s.ctl.Refreshed) >= catalogTTL {
+		pages, err := s.client.catalog(s.repo, s.ctl.Pages)
 		if err != nil {
 			s.kind = kindOf(err)
 			return err
 		}
-		s.st.Pages = pages
-		s.st.Refreshed = s.now
-		if err := saveState(s.dir, s.st); err != nil {
+		s.ctl.Pages = pages
+		s.ctl.Refreshed = s.now
+		if err := saveControl(s.dir, s.ctl); err != nil {
 			return err
 		}
 	}
@@ -221,7 +261,7 @@ func (s *syncer) sync() error {
 func (s *syncer) rows() []artifactRow {
 	seen := map[int64]bool{}
 	var out []artifactRow
-	for _, p := range s.st.Pages {
+	for _, p := range s.ctl.Pages {
 		for _, r := range p.Rows {
 			if !seen[r.ID] {
 				seen[r.ID] = true
@@ -236,24 +276,12 @@ func (s *syncer) rows() []artifactRow {
 // The files, not the index, say what is cached, so a lost file is downloaded
 // again and a lost index leaves every file readable.
 func (s *syncer) held() []int64 {
-	entries, _ := os.ReadDir(filepath.Join(s.dir, "artifacts"))
-	var ids []int64
-	for _, e := range entries {
-		name, ok := strings.CutSuffix(e.Name(), ".jsonl")
-		if !ok {
-			continue
-		}
-		if id, err := strconv.ParseInt(name, 10, 64); err == nil {
-			ids = append(ids, id)
-		}
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	return ids
+	return heldIn(s.dir)
 }
 
 // file is where an artifact's record file is cached.
 func (s *syncer) file(id int64) string {
-	return filepath.Join(s.dir, "artifacts", strconv.FormatInt(id, 10)+".jsonl")
+	return artifactFile(s.dir, id)
 }
 
 // pending lists the catalogued artifacts the cache lacks, newest first. An
@@ -264,14 +292,22 @@ func (s *syncer) pending() []artifactRow {
 	for _, id := range s.held() {
 		skip[id] = true
 	}
-	for _, id := range s.st.Unusable {
+	for _, id := range s.ctl.Unusable {
 		skip[id] = true
 	}
 	var out []artifactRow
 	for _, r := range s.rows() {
-		if !r.Expired && !skip[r.ID] {
-			out = append(out, r)
+		if r.Expired || skip[r.ID] {
+			continue
 		}
+		created := r.CreatedAt
+		if saved := s.ctl.Created[r.ID]; !saved.IsZero() {
+			created = saved
+		}
+		if evicted(created, r.ID, s.ctl.Boundary) {
+			continue
+		}
+		out = append(out, r)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
@@ -296,18 +332,29 @@ func (s *syncer) fetch(row artifactRow) error {
 	}
 	if err != nil {
 		s.problems = append(s.problems, fmt.Errorf("%s: artifact %d set aside: %w", s.repo, row.ID, err))
-		s.st.Unusable = append(s.st.Unusable, row.ID)
-		return saveState(s.dir, s.st)
+		seen := false
+		for _, id := range s.ctl.Unusable {
+			if id == row.ID {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			s.ctl.Unusable = append(s.ctl.Unusable, row.ID)
+		}
+		return saveControl(s.dir, s.ctl)
 	}
-	// the branch outlives the catalog row, which goes once the artifact expires
+	// the branch and creation time outlive the catalog row, which goes once
+	// the artifact expires
+	s.ctl.ensureMaps()
 	if row.Branch != "" {
-		if s.st.Branches == nil {
-			s.st.Branches = map[int64]string{}
-		}
-		s.st.Branches[row.ID] = row.Branch
-		if err := saveState(s.dir, s.st); err != nil {
-			return err
-		}
+		s.ctl.Branches[row.ID] = row.Branch
+	}
+	if !row.CreatedAt.IsZero() {
+		s.ctl.Created[row.ID] = row.CreatedAt
+	}
+	if err := saveControl(s.dir, s.ctl); err != nil {
+		return err
 	}
 	return writeFile(s.file(row.ID), body)
 }
@@ -316,18 +363,32 @@ func (s *syncer) fetch(row artifactRow) error {
 // artifacts both carry counts once: the first artifact that holds it keeps all
 // its lines, and the other's copies are dropped.
 func (s *syncer) read() ([]record.Line, map[string]string) {
+	rows := s.combinedRows()
 	branchOf := map[int64]string{}
-	for _, r := range s.rows() {
-		branchOf[r.ID] = r.Branch
+	for id, r := range rows {
+		if r.Branch != "" {
+			branchOf[id] = r.Branch
+		}
+	}
+	for id, b := range s.ctl.Branches {
+		if _, ok := branchOf[id]; !ok && b != "" {
+			branchOf[id] = b
+		}
 	}
 	for id, b := range s.st.Branches {
-		branchOf[id] = b
+		if _, ok := branchOf[id]; !ok && b != "" {
+			branchOf[id] = b
+		}
 	}
 	owner := map[string]int64{} // attempt → the artifact its lines come from
 	branch := map[string]string{}
 	var out []record.Line
 	malformed := 0
 	for _, id := range s.held() {
+		created, known := s.createdFor(id, rows)
+		if known && evicted(created, id, s.ctl.Boundary) {
+			continue
+		}
 		lines, bad, err := record.Read([]string{s.file(id)})
 		if err != nil {
 			s.problems = append(s.problems, err)
@@ -357,7 +418,7 @@ func (s *syncer) read() ([]record.Line, map[string]string) {
 }
 
 func (s *syncer) status() Status {
-	return Status{Repo: s.repo.String(), Synced: s.st.Refreshed, Pending: len(s.pending()), Kind: s.kind}
+	return Status{Repo: s.repo.String(), Synced: s.ctl.Refreshed, Pending: len(s.pending()), Kind: s.kind, Storage: s.pool}
 }
 
 // catalog refreshes the artifact listing, reusing every page the server still
@@ -581,14 +642,6 @@ func loadState(dir string) (state, error) {
 		return state{}, fmt.Errorf("%s: %w", p, err)
 	}
 	return st, nil
-}
-
-func saveState(dir string, st state) error {
-	data, err := json.MarshalIndent(st, "", "  ")
-	if err != nil {
-		return err
-	}
-	return writeFile(filepath.Join(dir, "state.json"), append(data, '\n'))
 }
 
 // writeFile replaces path with data, leaving no partial file behind.

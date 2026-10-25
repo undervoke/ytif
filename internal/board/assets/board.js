@@ -23,6 +23,10 @@ const T = {
     srcCI: (repo, range, n) => `CI · ${repo}${range ? ` · ${range}` : ""}${n ? ` · ${n} runs` : ""}`,
     srcSynced: t => `synced ${t}`, srcPending: n => `${n} pending`,
     srcOffline: "sync failed: offline", srcNoCredentials: "sync failed: no credentials", srcNoArtifact: "no artifact",
+    srcEvicted: (date, id) => `retention-limited history · eviction boundary ${date}${id ? ` / artifact ${id}` : ""}`,
+    srcShort: n => `observed history shorter than the ${n}-day hit window`,
+    srcLegacy: size => `legacy file ${size} (outside the managed cap)`,
+    srcOverage: size => `managed storage ${size} over budget`, srcMaintenance: error => `maintenance deferred: ${error}`,
     gateTitle: "Verification time per gate", avg: "Average", branch: "Branch", noBranch: "(no branch)", noItem: "(no item)",
     criteriaAvg: "Average", criteriaAvgText: "Mean of the last N timed results per verification and gate, and per process and gate.",
     criteriaBranch: "Branch", criteriaBranchText: "Each gate's latest run on the current branch: the sum of its timed results.",
@@ -82,6 +86,10 @@ const T = {
     srcCI: (repo, range, n) => `CI · ${repo}${range ? ` · ${range}` : ""}${n ? ` · ${n}회` : ""}`,
     srcSynced: t => `동기화 ${t}`, srcPending: n => `대기 ${n}`,
     srcOffline: "동기화 실패: 오프라인", srcNoCredentials: "동기화 실패: credentials 없음", srcNoArtifact: "artifact 없음",
+    srcEvicted: (date, id) => `보존 한도로 줄어든 기록 · 정리 경계 ${date}${id ? ` / artifact ${id}` : ""}`,
+    srcShort: n => `관측된 기록 범위가 hit 기간 ${n}일보다 짧음`,
+    srcLegacy: size => `기존 파일 ${size} (관리 용량 한도와 별도)`,
+    srcOverage: size => `관리 기록 용량 ${size} 초과`, srcMaintenance: error => `정리 보류: ${error}`,
     gateTitle: "gate별 검증 시간 합", avg: "평균", branch: "branch 기준", noBranch: "(branch 없음)", noItem: "(항목 없음)",
     criteriaAvg: "평균", criteriaAvgText: "검증×gate별, 프로세스×gate별 시간이 기록된 최근 N회 평균",
     criteriaBranch: "branch 기준", criteriaBranchText: "현재 branch에서 gate별 마지막 실행 1회의 검증 시간 합",
@@ -445,11 +453,29 @@ function syncHash(st, f) {
   setHash("#/verifications" + (s ? "?" + s : ""));
 }
 
+function storageBytes(n) {
+  const units = ["B", "KiB", "MiB", "GiB"];
+  let u = 0;
+  while (n >= 1024 && u < units.length - 1) { n /= 1024; u++ }
+  return `${fmt(Math.round(n * 10) / 10)} ${units[u]}`;
+}
+
+function retentionParts(pool, from) {
+  const parts = [];
+  if (pool?.boundary) parts.push(t("srcEvicted", day(pool.boundary.time), pool.boundary.id));
+  else if (from && new Date(from) > new Date(new Date(META.generated).getTime() - CRITERIA.hits.days * 86400000)) parts.push(t("srcShort", CRITERIA.hits.days));
+  if (pool?.legacy_bytes) parts.push(t("srcLegacy", storageBytes(pool.legacy_bytes)));
+  if (pool?.overage) parts.push(t("srcOverage", storageBytes(pool.overage)));
+  if (pool?.error) parts.push(t("srcMaintenance", pool.error));
+  return parts;
+}
+
 function sourceLine() {
   const parts = [];
   const local = META.local || { attempts: {} };
   const runs = Object.values(local.attempts || {}).reduce((s, n) => s + n, 0);
   parts.push(local.from ? t("srcLocal", day(local.from), day(local.to), fmt(runs)) : t("srcLocalEmpty"));
+  parts.push(...retentionParts(META.local_storage, local.from));
   const ci = META.ci;
   if (ci) {
     parts.push(t("srcCI", ci.repo, ci.from ? `${day(ci.from)} – ${day(ci.to)}` : "", ci.attempts ? fmt(ci.attempts) : ""));
@@ -460,6 +486,7 @@ function sourceLine() {
       if (ci.synced) parts.push(t("srcSynced", when(ci.synced)));
       if (ci.pending) parts.push(t("srcPending", fmt(ci.pending)));
     }
+    parts.push(...retentionParts(ci.storage, ci.from));
   }
   return parts.join(" · ");
 }

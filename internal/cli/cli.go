@@ -3,6 +3,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -23,6 +24,7 @@ import (
 	"github.com/undervoke/ytif/internal/inventory"
 	"github.com/undervoke/ytif/internal/launch"
 	"github.com/undervoke/ytif/internal/record"
+	"github.com/undervoke/ytif/internal/storage"
 )
 
 const usageText = `usage: ytif <command> [flags]
@@ -176,24 +178,40 @@ func runBoard(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "ytif: %v\n", err)
 		return gate.ExitUsage
 	}
+	now := time.Now()
+	var lines []record.Line
+	var malformed int
+	var localStorage *storage.Pool
 	if len(paths) == 0 {
-		paths = multiFlag{record.DefaultPath(common)}
+		status, maintenanceErr := record.Maintain(common, now)
+		localStorage = &status
+		if errors.Is(maintenanceErr, storage.ErrBusy) {
+			if receipt, err := storage.ReadReceipt(common); err == nil {
+				status = receipt.Local
+			}
+		} else if maintenanceErr != nil {
+			fmt.Fprintf(stderr, "ytif: record maintenance: %v\n", maintenanceErr)
+		}
+		lines, malformed, err = record.ReadManaged(common)
+	} else {
+		lines, malformed, err = record.Read(paths)
 	}
-	lines, malformed, err := record.Read(paths)
 	if err != nil {
 		fmt.Fprintf(stderr, "ytif: %v\n", err)
-		return gate.ExitUsage
+		if localStorage == nil {
+			return gate.ExitUsage
+		}
+		localStorage.Error = err.Error()
 	}
 	if malformed > 0 {
 		fmt.Fprintf(stderr, "ytif: skipped %d malformed record lines\n", malformed)
 	}
-	now := time.Now()
-	src := board.Sources{Local: lines}
+	src := board.Sources{Local: lines, LocalStorage: localStorage}
 	if _, ok := cirecords.Origin(root); ok {
 		client := cirecords.Client{Token: cirecords.Token()}
 		result, err := client.Sync(root, common, now)
 		if err != nil {
-			fmt.Fprintf(stderr, "ytif: CI records: %v; showing cached records\n", err)
+			fmt.Fprintf(stderr, "ytif: CI records: %s; showing cached records\n", strings.ReplaceAll(err.Error(), "\n", "; "))
 		}
 		src.Remote, src.RemoteBranch, src.Status = result.Lines, result.Branch, &result.Status
 	}

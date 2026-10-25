@@ -18,6 +18,7 @@ import (
 	"github.com/undervoke/ytif/internal/cirecords"
 	"github.com/undervoke/ytif/internal/inventory"
 	"github.com/undervoke/ytif/internal/record"
+	"github.com/undervoke/ytif/internal/storage"
 )
 
 //go:embed assets
@@ -48,6 +49,7 @@ type Sources struct {
 	Branch       string
 	RemoteBranch map[string]string
 	Status       *cirecords.Status
+	LocalStorage *storage.Pool
 }
 
 // Render builds the page from the assets, the verification ledger under root,
@@ -199,23 +201,25 @@ type hitWindowOut struct {
 }
 
 type ciOut struct {
-	Repo     string     `json:"repo"`
-	From     *time.Time `json:"from,omitempty"`
-	To       *time.Time `json:"to,omitempty"`
-	Attempts int        `json:"attempts"`
-	Synced   *time.Time `json:"synced,omitempty"`
-	Pending  int        `json:"pending"`
-	Status   string     `json:"status,omitempty"`
+	Repo     string        `json:"repo"`
+	From     *time.Time    `json:"from,omitempty"`
+	To       *time.Time    `json:"to,omitempty"`
+	Attempts int           `json:"attempts"`
+	Synced   *time.Time    `json:"synced,omitempty"`
+	Pending  int           `json:"pending"`
+	Status   string        `json:"status,omitempty"`
+	Storage  *storage.Pool `json:"storage,omitempty"`
 }
 
 type metaOut struct {
-	Repo      string      `json:"repo"`
-	Version   int         `json:"version"`
-	Generated time.Time   `json:"generated"`
-	Branch    string      `json:"branch"`
-	Criteria  criteriaOut `json:"criteria"`
-	Local     spanOut     `json:"local"`
-	CI        *ciOut      `json:"ci,omitempty"`
+	Repo         string        `json:"repo"`
+	Version      int           `json:"version"`
+	Generated    time.Time     `json:"generated"`
+	Branch       string        `json:"branch"`
+	Criteria     criteriaOut   `json:"criteria"`
+	Local        spanOut       `json:"local"`
+	CI           *ciOut        `json:"ci,omitempty"`
+	LocalStorage *storage.Pool `json:"local_storage,omitempty"`
 }
 
 type boardData struct {
@@ -239,8 +243,9 @@ func build(repo string, inv inventory.Inventory, src Sources, now time.Time) boa
 	d := boardData{
 		Meta: metaOut{
 			Repo: repo, Version: inv.Version, Generated: now.UTC(), Branch: src.Branch,
-			Criteria: criteriaOut{Average: settings.Average, Hits: hitWindowOut{Days: settings.HitDays, Last: settings.HitLast}, RecentFailDays: settings.RecentFailDays},
-			Local:    spanOf(local),
+			Criteria:     criteriaOut{Average: settings.Average, Hits: hitWindowOut{Days: settings.HitDays, Last: settings.HitLast}, RecentFailDays: settings.RecentFailDays},
+			Local:        spanOf(local),
+			LocalStorage: src.LocalStorage,
 		},
 		Groups:        []groupOut{},
 		Files:         files(inv),
@@ -252,6 +257,7 @@ func build(repo string, inv inventory.Inventory, src Sources, now time.Time) boa
 		d.Meta.CI = &ciOut{
 			Repo: src.Status.Repo, From: sp.From, To: sp.To, Attempts: sp.Attempts[check.GateCI],
 			Pending: src.Status.Pending, Status: src.Status.Kind,
+			Storage: &src.Status.Storage,
 		}
 		if !src.Status.Synced.IsZero() {
 			synced := src.Status.Synced.UTC()

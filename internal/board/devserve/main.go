@@ -6,17 +6,20 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/undervoke/ytif/internal/board"
 	"github.com/undervoke/ytif/internal/cirecords"
 	"github.com/undervoke/ytif/internal/gitx"
 	"github.com/undervoke/ytif/internal/record"
+	"github.com/undervoke/ytif/internal/storage"
 )
 
 const addr = "127.0.0.1:8765"
@@ -52,16 +55,25 @@ func main() {
 }
 
 func render(assets fs.FS, root, common string) ([]byte, error) {
-	lines, _, err := record.Read([]string{record.DefaultPath(common)})
-	if err != nil {
-		return nil, err
-	}
 	now := time.Now()
-	src := board.Sources{Local: lines}
+	status, maintenanceErr := record.Maintain(common, now)
+	if errors.Is(maintenanceErr, storage.ErrBusy) {
+		if receipt, err := storage.ReadReceipt(common); err == nil {
+			status = receipt.Local
+		}
+	} else if maintenanceErr != nil {
+		fmt.Fprintf(os.Stderr, "devserve: record maintenance: %v\n", maintenanceErr)
+	}
+	lines, _, err := record.ReadManaged(common)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "devserve: records: %v\n", err)
+		status.Error = err.Error()
+	}
+	src := board.Sources{Local: lines, LocalStorage: &status}
 	if _, ok := cirecords.Origin(root); ok {
 		result, err := (cirecords.Client{Token: cirecords.Token()}).Sync(root, common, now)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "devserve: CI records: %v; showing cached records\n", err)
+			fmt.Fprintf(os.Stderr, "devserve: CI records: %s; showing cached records\n", strings.ReplaceAll(err.Error(), "\n", "; "))
 		}
 		src.Remote, src.RemoteBranch, src.Status = result.Lines, result.Branch, &result.Status
 	}

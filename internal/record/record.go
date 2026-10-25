@@ -11,10 +11,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/undervoke/ytif/internal/storage"
 )
 
 // Line kinds.
@@ -82,8 +85,16 @@ func Millis(d time.Duration) *int64 {
 	return &ms
 }
 
-// DefaultPath is the local record file inside the git common directory.
+// DefaultPath is the active managed record file inside the git common
+// directory. Closed segments live beside it in the same directory.
 func DefaultPath(commonDir string) string {
+	return filepath.Join(commonDir, "ytif", "records", "active.jsonl")
+}
+
+// LegacyPath is the pre-rotation record file. New writers never append to
+// it; it stays readable until explicitly handled and is never pruned by
+// maintenance.
+func LegacyPath(commonDir string) string {
 	return filepath.Join(commonDir, "ytif", "records.jsonl")
 }
 
@@ -95,6 +106,9 @@ func NewAttempt() string {
 }
 
 // Append writes lines to path in one write, creating the file if needed.
+// It holds a shared lock while writing and reopens when the inode was
+// unlinked between open and lock, so an unlink under an exclusive lock
+// never absorbs a concurrent batch.
 func Append(path string, lines []Line) error {
 	if len(lines) == 0 {
 		return nil
@@ -109,15 +123,27 @@ func Append(path string, lines []Line) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
+	for {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return err
+		}
+		if err := storage.Shared(f); err != nil {
+			f.Close()
+			return err
+		}
+		ok, err := storage.Linked(f)
+		if err != nil {
+			storage.Unlock(f)
+			return err
+		}
+		if !ok {
+			storage.Unlock(f)
+			continue
+		}
+		_, werr := f.Write(buf.Bytes())
+		return errors.Join(werr, storage.Unlock(f))
 	}
-	if _, err := f.Write(buf.Bytes()); err != nil {
-		f.Close()
-		return err
-	}
-	return f.Close()
 }
 
 // Read loads every line from paths in order. Missing files are skipped;
@@ -132,23 +158,41 @@ func Read(paths []string) (lines []Line, malformed int, err error) {
 		if err != nil {
 			return nil, 0, err
 		}
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 64*1024), 16*1024*1024)
-		for sc.Scan() {
-			if len(bytes.TrimSpace(sc.Bytes())) == 0 {
-				continue
-			}
-			var l Line
-			if json.Unmarshal(sc.Bytes(), &l) != nil {
-				malformed++
-				continue
-			}
-			lines = append(lines, l)
-		}
+		var bad int
+		lines, bad, err = scanInto(f, lines)
 		f.Close()
-		if err := sc.Err(); err != nil {
+		if err != nil {
 			return nil, 0, fmt.Errorf("%s: %w", p, err)
 		}
+		malformed += bad
 	}
 	return lines, malformed, nil
+}
+
+// scanInto appends the valid lines r holds. Malformed lines count; a read
+// failure reports alongside whatever was already scanned.
+func scanInto(r io.Reader, lines []Line) ([]Line, int, error) {
+	bad, err := eachRecord(r, func(l Line) { lines = append(lines, l) })
+	return lines, bad, err
+}
+
+// eachRecord runs fn on every decodable line. Blank lines skip; malformed
+// ones count. Maintenance summaries share this loop so scanner behavior
+// stays identical everywhere.
+func eachRecord(r io.Reader, fn func(Line)) (int, error) {
+	var malformed int
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64*1024), 16*1024*1024)
+	for sc.Scan() {
+		if len(bytes.TrimSpace(sc.Bytes())) == 0 {
+			continue
+		}
+		var l Line
+		if json.Unmarshal(sc.Bytes(), &l) != nil {
+			malformed++
+			continue
+		}
+		fn(l)
+	}
+	return malformed, sc.Err()
 }

@@ -32,7 +32,7 @@ type Options struct {
 	Jobs    int       // processes run at once; 0 means DefaultJobs
 	Report  string    // "" or "github"
 	Record  bool      // append records for this trigger
-	Records string    // "" means <git-common-dir>/ytif/records.jsonl
+	Records string    // "" means the managed <git-common-dir>/ytif/records/active.jsonl
 	Stdin   io.Reader // push only: pre-push ref lines
 	Stdout  io.Writer
 	Stderr  io.Writer
@@ -209,7 +209,7 @@ func Run(ctx context.Context, root string, o Options) int {
 		status = "fail"
 	}
 	lines = append(lines, record.Line{Time: now, Attempt: attempt, Kind: record.KindSelection, Gate: o.Gate, Scope: in.Scope, Outcome: status, Selection: &selection})
-	if err := writeRecords(root, o.Records, lines); err != nil {
+	if err := writeRecords(root, o.Records, lines, o.Stderr); err != nil {
 		fmt.Fprintf(o.Stderr, "ytif: records not written: %v\n", err)
 		return ExitUsage
 	}
@@ -337,13 +337,13 @@ func clip(s string) string {
 	return strings.ToValidUTF8(s[:max], "") + "…"
 }
 
-func writeRecords(root, path string, lines []record.Line) error {
+func writeRecords(root, path string, lines []record.Line, warn io.Writer) error {
 	if path == "" {
 		common, err := gitx.CommonDir(root)
 		if err != nil {
 			return err
 		}
-		path = record.DefaultPath(common)
+		return record.AppendManaged(common, lines, warn)
 	}
 	return record.Append(path, lines)
 }

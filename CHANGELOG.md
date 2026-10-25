@@ -7,6 +7,14 @@ module proxy may already have cached that version.
 
 ## [Unreleased]
 
+### Added
+
+- Recording and `ytif board` delete closed local record files and dated CI artifacts older than 400 days or beyond 1 GiB, counted separately for local and CI records; the open file and undated artifacts can exceed these limits. `<git-common-dir>/ytif/storage.json` overrides the limits.
+
+### Changed
+
+- Local records move to `<git-common-dir>/ytif/records/`. The previous `records.jsonl` still feeds statistics but is excluded from the limits and never deleted; remove it by hand once no older ytif writes it and its history is no longer needed.
+
 ## [0.12.0] - 2026-10-25
 
 ### Added

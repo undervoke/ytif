@@ -208,26 +208,37 @@ entries:
 ## Records and board
 
 `ytif check` and lefthook's `ytif commit --hook` / `ytif push --hook`
-append results, timings, and selection to `<git-common-dir>/ytif/records.jsonl`;
+append results, timings, and selection to `<git-common-dir>/ytif/records/`; <!-- dinyd: internal/record/record.go#DefaultPath s1:ca79b9c2bc10b015 -->
 `--records PATH` selects another destination. Remote CI workflows record with
 `ytif ci --records PATH` and publish that file as an artifact.
 `ytif list` shows verifications and findings.
 
 `ytif board` writes the ledger and its records as one HTML file and opens it;
 `--out PATH` only writes it, and `--records PATH` reads those files instead of
-the default one.
+the default ones.
+
+Recording and `ytif board` delete the oldest closed record files (rotated at about 8 MiB) and dated CI artifacts once they pass 400 days or 1 GiB, counted separately for local and CI records; the open file and undated artifacts stay, so storage can exceed these limits. <!-- dinyd: internal/storage/storage.go#SegmentBytes s1:1d70f44b784722de --> <!-- dinyd: internal/storage/storage.go#Defaults s1:757196d8b34afc71 --> <!-- dinyd: internal/cirecords/retention.go#syncer.runGC s1:76c793dbc299453a -->
+`<git-common-dir>/ytif/storage.json` overrides the limits for every worktree; an invalid file stops deletion until it is fixed: <!-- dinyd: internal/storage/storage.go#Load s1:0ba85313cec0c9d2 -->
+
+```json
+{"days": 400, "local_max_bytes": 1073741824, "ci_max_bytes": 1073741824}
+```
+
+Deleted history stays gone when a statistics window is raised; the board's source line shows how far back history reaches.
+`<git-common-dir>/ytif/records.jsonl` from earlier releases still feeds statistics but is excluded from the limits and never deleted; remove it by hand once no older ytif writes it and its history is no longer needed. <!-- dinyd: internal/record/managed.go#ReadManaged s1:e90c22da049d9cab -->
+Files named with `--records` are never deleted.
 
 On a repository whose origin is GitHub, the board also syncs the `ytif-records`
 artifacts of that repository into `<git-common-dir>/ytif/ci-cache/`. It lists
 the catalog at most every five minutes, downloads at most twenty unseen
-artifacts per build (newest first), and keeps what it downloaded, so the next
+artifacts per build (newest first), and keeps them within those limits, so the next
 build resumes where the last one stopped. The token comes from `GH_TOKEN`, then
 `GITHUB_TOKEN`, then `gh auth token --hostname github.com`. Without
 credentials, a network, or any artifact, the page renders the cached records
 and names on the source line why the sync stopped.
 
 A gate's time is the sum of its current members' means. <!-- dinyd: internal/board/board.go#summarize s1:824cf197241d735e -->
-Each mean uses the last N timed results of that verification at that gate. <!-- dinyd: internal/board/board.go#aggregate s1:a73be260f7500632 --> <!-- dinyd: internal/board/board.go#meansOf s1:23e869a0e30312a9 --> <!-- dinyd: internal/board/board.go#build s1:8e3ca1d9078ab9ed -->
+Each mean uses the last N timed results of that verification at that gate. <!-- dinyd: internal/board/board.go#aggregate s1:a73be260f7500632 --> <!-- dinyd: internal/board/board.go#meansOf s1:23e869a0e30312a9 --> <!-- dinyd: internal/board/board.go#build s1:4569ceeefde16f07 -->
 A fail counts as one hit; later fails of that verification at that gate count again only after a pass. <!-- dinyd: internal/record/hits.go#Hits s1:d5b7e4a02af8b181 -->
 Hits are counted over the last `days` days, with an optional latest-attempt limit per gate. <!-- dinyd: internal/board/board.go#window s1:374dbfd9604443da -->
 Only the root ledger sets the windows:

@@ -12,7 +12,7 @@ config:
   flowchart:
     wrappingWidth: 270
 ---
-%% Behavior authority: internal/gate/gate.go (recordLines, writeRecords), internal/record/record.go, internal/cirecords/cirecords.go, internal/cli/cli.go (runGate, runBoard), internal/board/board.go (Render), .github/workflows/ci.yml and README.md (Records and board).
+%% Behavior authority: internal/gate/gate.go (recordLines, writeRecords), internal/record, internal/storage, internal/cirecords, internal/cli/cli.go (runGate, runBoard), internal/board/board.go (Render), .github/workflows/ci.yml and README.md (Records and board).
 %% CI upload is configured by the host workflow; ytif itself writes a local file. Artifact retention is also host-owned.
 %% Recording-enabled runs append at gate finalization, including ordinary failures. An early exit or forced termination may leave no records; interrupted work has no completed result.
 %% The board reads the local records and, on GitHub, syncs the repository's artifacts into a cache beside them; --records chooses other local files.
@@ -25,7 +25,7 @@ flowchart LR
     %% dinyd: internal/record/record.go#ArtifactName s1:7cb35f171e9231c3
     %% dinyd: internal/record/record.go#ArtifactFile s1:89465f0422dd423c
     CIGate -->|Append at finalization| CIRec
-    %% dinyd: internal/gate/gate.go#Run s1:bc59694ce3896912
+    %% dinyd: internal/gate/gate.go#Run s1:48aeaded1e0ab95a
     CIRec -->|Upload step| Artifact
     %% dinyd: .github/workflows/ci.yml#/jobs/ytif/steps/6 s1:e0faf688a33499c5
   end
@@ -33,21 +33,32 @@ flowchart LR
   subgraph Dev["Developer machine"]
     LocalGate["Local recording triggers<br/><small>• Direct: check<br/>• lefthook: commit / push --hook</small>"]
     %% dinyd: internal/cli/cli.go#runGate s1:2b68e51020262f2b
-    Default@{ shape: doc, label: "Default local records<br/><small>• Git common dir, shared by worktrees<br/>• --records writes elsewhere</small>" }
-    %% dinyd: internal/gate/gate.go#writeRecords s1:68e60c8f0f354f38
-    %% dinyd: internal/record/record.go#DefaultPath s1:4fb1cc34a5d7f2c9
+    Default@{ shape: docs, label: "Managed local records<br/><small>• Active file and whole segments<br/>• Shared by linked worktrees</small>" }
+    %% dinyd: internal/gate/gate.go#writeRecords s1:ca09717033ae166a
+    %% dinyd: internal/record/record.go#DefaultPath s1:ca79b9c2bc10b015
+    Legacy@{ shape: doc, label: "records.jsonl from earlier releases<br/><small>Read, never deleted</small>" }
+    %% dinyd: internal/record/managed.go#ReadManaged s1:e90c22da049d9cab
+    Policy@{ shape: doc, label: "storage.json<br/><small>One policy per git common directory</small>" }
+    %% dinyd: internal/storage/storage.go#Load s1:0ba85313cec0c9d2
+    Maintain["Retention<br/><small>• On recording and board builds<br/>• Deletes the oldest whole files and artifacts</small>"]
+    %% dinyd: internal/record/managed.go#Maintain s1:bd2e59d49354e99e
     Cache@{ shape: doc, label: "CI artifact cache<br/><small>• Git common dir, newest 20 per build<br/>• Catalog rechecked every 5 minutes</small>" }
     %% dinyd: internal/cirecords/cirecords.go#CacheDir s1:574c952dc4063ca7
-    %% dinyd: internal/cirecords/cirecords.go#syncer.sync s1:fe0d239ce86a3403
+    %% dinyd: internal/cirecords/cirecords.go#syncer.sync s1:6081eb13c63d30f1
     %% dinyd: internal/cirecords/cirecords.go#catalogTTL s1:ac8ca11e8073982d
     %% dinyd: internal/cirecords/cirecords.go#maxDownloads s1:e27819ca56ccc4ba
     Registry@{ shape: docs, label: "Current verification registry<br/><small>Root file and its includes</small>" }
     Board["ytif board<br/><small>Joins history to current verifications by key</small>"]
-    %% dinyd: internal/cli/cli.go#runBoard s1:fba96009e37de463
+    %% dinyd: internal/cli/cli.go#runBoard s1:9900fb06a94fcf25
     HTML@{ shape: doc, label: "board.html<br/><small>• Static snapshot<br/>• Ledger tree, averages and hits<br/>• Opens by default; --out only writes</small>" }
     %% dinyd: internal/board/board.go#Render s1:c7be22f94b532a23
     LocalGate -->|Append at finalization| Default
-    Default -->|Default| Board
+    Policy --> Maintain
+    Maintain --> Default
+    Maintain --> Cache
+    %% dinyd: internal/cirecords/retention.go#syncer.runGC s1:76c793dbc299453a
+    Default --> Board
+    Legacy --> Board
     Cache -->|ci records| Board
     Registry --> Board --> HTML
   end
@@ -58,5 +69,5 @@ flowchart LR
   classDef file fill:#3d3415,stroke:#fcd34d
   classDef ext fill:#40291a,stroke:#fdba74
   class Board em
-  class CIRec,Default,Cache,Registry,HTML file
+  class CIRec,Default,Legacy,Policy,Cache,Registry,HTML file
   class Artifact ext
