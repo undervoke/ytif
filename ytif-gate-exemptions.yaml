@@ -37,5 +37,19 @@ entries:
       (cd dist && sha256sum ./*.tar.gz > SHA256SUMS)
     reason: Packages the release archives.
   - surface: github-actions
-    run: gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS --title "$GITHUB_REF_NAME" --generate-notes
+    run: |
+      set -euo pipefail
+      # the tag's CHANGELOG.md section, without its heading
+      awk -v head="## [${GITHUB_REF_NAME#v}]" '
+        /^## \[/ { if (on) exit; on = index($0, head) == 1; next }
+        /^\[[^]]+\]: / { next }
+        on
+      ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+      if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
+        echo "::error file=CHANGELOG.md::no section for $GITHUB_REF_NAME"
+        exit 1
+      fi
+    reason: Extracts the tag's release notes from CHANGELOG.md.
+  - surface: github-actions
+    run: gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes
     reason: Publishes the release.

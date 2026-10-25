@@ -12,6 +12,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: notes
+        run: |
+          set -euo pipefail
+          # the tag's CHANGELOG.md section, without its heading
+          awk -v head="## [${GITHUB_REF_NAME#v}]" '
+            /^## \[/ { if (on) exit; on = index($0, head) == 1; next }
+            /^\[[^]]+\]: / { next }
+            on
+          ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
+            echo "::error file=CHANGELOG.md::no section for $GITHUB_REF_NAME"
+            exit 1
+          fi
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -31,4 +44,4 @@ jobs:
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS --title "$GITHUB_REF_NAME" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes
