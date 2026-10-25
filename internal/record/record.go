@@ -124,7 +124,7 @@ func Append(path string, lines []Line) error {
 		return err
 	}
 	for {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		f, err := storage.Open(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
 			return err
 		}
@@ -151,7 +151,7 @@ func Append(path string, lines []Line) error {
 // the rest of the history.
 func Read(paths []string) (lines []Line, malformed int, err error) {
 	for _, p := range paths {
-		f, err := os.Open(p)
+		f, err := storage.Open(p, os.O_RDONLY, 0)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}

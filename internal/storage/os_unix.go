@@ -4,31 +4,24 @@ package storage
 
 import (
 	"errors"
+	"io/fs"
 	"os"
-	"path/filepath"
 
 	"golang.org/x/sys/unix"
 )
 
-var ErrBusy = errors.New("maintenance already running")
-
-func MaintenanceLock(common string, wait bool) (*os.File, error) {
-	return Lock(filepath.Join(Dir(common), "maintenance.lock"), wait)
+// Open is os.OpenFile: unix already lets an open file be renamed or removed.
+func Open(path string, flag int, perm fs.FileMode) (*os.File, error) {
+	return os.OpenFile(path, flag, perm)
 }
 
-func Lock(path string, wait bool) (*os.File, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if err := Exclusive(f, wait); err != nil {
-		f.Close()
-		return nil, err
-	}
-	return f, nil
+	defer d.Close()
+	return d.Sync()
 }
 
 func flock(f *os.File, how int) error {

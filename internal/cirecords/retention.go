@@ -74,7 +74,7 @@ func controlPath(dir string) string {
 // bootstrap, returns an error so callers defer destructive cleanup.
 func loadControl(dir string) (control, state, error) {
 	var ctl control
-	data, err := os.ReadFile(controlPath(dir))
+	data, err := storage.ReadFile(controlPath(dir))
 	if err == nil {
 		if uerr := json.Unmarshal(data, &ctl); uerr != nil {
 			leg, _ := loadState(dir)

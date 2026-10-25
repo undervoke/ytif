@@ -168,7 +168,7 @@ func ReadManaged(common string) ([]Line, int, error) {
 		errs = append(errs, rerr)
 	}
 	open := func(path string, role int) {
-		f, err := os.Open(path)
+		f, err := storage.Open(path, os.O_RDONLY, 0)
 		if errors.Is(err, fs.ErrNotExist) {
 			return
 		}
@@ -333,7 +333,7 @@ func rotateActive(active, dir string, now time.Time) error {
 
 // scanBounds reports a file's oldest and newest valid times.
 func scanBounds(path string, fallback time.Time) (time.Time, time.Time) {
-	f, err := os.Open(path)
+	f, err := storage.Open(path, os.O_RDONLY, 0)
 	if err != nil {
 		return fallback, fallback
 	}
@@ -426,7 +426,7 @@ func hintScan(dir string, segs []string) ([]segStats, []string) {
 // scanFileStats summarizes one file without locking; a hint only.
 func scanFileStats(path string) segStats {
 	var st segStats
-	f, err := os.Open(path)
+	f, err := storage.Open(path, os.O_RDONLY, 0)
 	if err != nil {
 		return st
 	}
@@ -468,7 +468,7 @@ func removeSegment(path string, beforeDelete func(segStats) error) (segStats, er
 
 // openExclusive opens a segment and holds its exclusive lock.
 func openExclusive(path string) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_RDWR, 0o644)
+	f, err := storage.Open(path, os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, err
 	}

@@ -26,6 +26,38 @@ func Defaults() Policy {
 
 func Dir(common string) string { return filepath.Join(common, "ytif") }
 
+var ErrBusy = errors.New("maintenance already running")
+
+func MaintenanceLock(common string, wait bool) (*os.File, error) {
+	return Lock(filepath.Join(Dir(common), "maintenance.lock"), wait)
+}
+
+func Lock(path string, wait bool) (*os.File, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	f, err := Open(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := Exclusive(f, wait); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+// ReadFile reads a file through Open, so the reader never blocks a rename
+// or removal of it.
+func ReadFile(path string) ([]byte, error) {
+	f, err := Open(path, os.O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
+}
+
 func Load(common string) (Policy, error) {
 	p := Defaults()
 	path := filepath.Join(Dir(common), "storage.json")
@@ -96,7 +128,7 @@ type Receipt struct {
 
 func ReadReceipt(common string) (Receipt, error) {
 	var r Receipt
-	b, err := os.ReadFile(filepath.Join(Dir(common), "maintenance.json"))
+	b, err := ReadFile(filepath.Join(Dir(common), "maintenance.json"))
 	if errors.Is(err, os.ErrNotExist) {
 		return r, nil
 	}
@@ -166,10 +198,5 @@ func WriteJSON(path string, value any) error {
 	if err := os.Rename(f.Name(), path); err != nil {
 		return err
 	}
-	d, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer d.Close()
-	return d.Sync()
+	return syncDir(dir)
 }

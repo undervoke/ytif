@@ -225,7 +225,7 @@ Recording and `ytif board` delete the oldest closed record files (rotated at abo
 ```
 
 Deleted history stays gone when a statistics window is raised; the board's source line shows how far back history reaches.
-`<git-common-dir>/ytif/records.jsonl` from earlier releases still feeds statistics but is excluded from the limits and never deleted; remove it by hand once no older ytif writes it and its history is no longer needed. <!-- dinyd: internal/record/managed.go#ReadManaged s1:e90c22da049d9cab -->
+`<git-common-dir>/ytif/records.jsonl` from earlier releases still feeds statistics but is excluded from the limits and never deleted; remove it by hand once no older ytif writes it and its history is no longer needed. <!-- dinyd: internal/record/managed.go#ReadManaged s1:9a5b80a1f826ad01 -->
 Files named with `--records` are never deleted.
 
 On a repository whose origin is GitHub, the board also syncs the `ytif-records`

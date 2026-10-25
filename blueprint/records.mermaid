@@ -37,7 +37,7 @@ flowchart LR
     %% dinyd: internal/gate/gate.go#writeRecords s1:ca09717033ae166a
     %% dinyd: internal/record/record.go#DefaultPath s1:ca79b9c2bc10b015
     Legacy@{ shape: doc, label: "records.jsonl from earlier releases<br/><small>Read, never deleted</small>" }
-    %% dinyd: internal/record/managed.go#ReadManaged s1:e90c22da049d9cab
+    %% dinyd: internal/record/managed.go#ReadManaged s1:9a5b80a1f826ad01
     Policy@{ shape: doc, label: "storage.json<br/><small>One policy per git common directory</small>" }
     %% dinyd: internal/storage/storage.go#Load s1:0ba85313cec0c9d2
     Maintain["Retention<br/><small>• On recording and board builds<br/>• Deletes the oldest whole files and artifacts</small>"]

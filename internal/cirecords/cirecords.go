@@ -630,7 +630,7 @@ type artifactRow struct {
 // either way.
 func loadState(dir string) (state, error) {
 	p := filepath.Join(dir, "state.json")
-	data, err := os.ReadFile(p)
+	data, err := storage.ReadFile(p)
 	if errors.Is(err, fs.ErrNotExist) {
 		return state{}, nil
 	}
