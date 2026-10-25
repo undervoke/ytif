@@ -16,7 +16,7 @@ Pin ytif per project, so hooks, CI, and every clone run the same version
 (Go 1.24 or later):
 
 ```sh
-go get -tool github.com/undervoke/ytif/cmd/ytif@v0.13.0
+go get -tool github.com/undervoke/ytif/cmd/ytif@v0.13.1
 ```
 
 Read every `ytif` below as `go tool ytif`. Outside a Go module, download a

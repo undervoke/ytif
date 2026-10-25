@@ -7,6 +7,12 @@ module proxy may already have cached that version.
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-10-26
+
+### Fixed
+
+- ytif builds on Windows again, and record retention there renames and deletes files other ytif processes hold open, as on unix.
+
 ## [0.13.0] - 2026-10-26
 
 ### Added
@@ -196,7 +202,8 @@ Existing `version: 2` inventories remain compatible. `commands:` is optional and
 
 - Checks run without the hook repository's git environment variables.
 
-[Unreleased]: https://github.com/undervoke/ytif/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/undervoke/ytif/compare/v0.13.1...HEAD
+[0.13.1]: https://github.com/undervoke/ytif/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/undervoke/ytif/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/undervoke/ytif/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/undervoke/ytif/compare/v0.10.0...v0.11.0
