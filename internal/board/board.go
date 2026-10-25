@@ -38,9 +38,6 @@ const GateCheck = check.GateCheck
 // gateOrder is the display order for gates.
 var gateOrder = []string{check.GateCheck, check.GateCommit, check.GatePush, check.GateCI}
 
-// recentFailDays bounds the failure flag a row carries.
-const recentFailDays = 30
-
 // Sources are the records and the branch the page shows: the local record
 // lines, the CI lines read from the artifact cache, the checked-out branch,
 // each CI attempt's branch, and the CI sync status. A nil Status leaves CI out
@@ -188,10 +185,12 @@ type spanOut struct {
 }
 
 // criteriaOut states the windows the page's figures use: the timed samples a
-// mean keeps per gate, and the population a hit is counted in.
+// mean keeps per gate, the population a hit is counted in, and how far back a
+// fail marks a verification.
 type criteriaOut struct {
-	Average map[string]int `json:"average"`
-	Hits    hitWindowOut   `json:"hits"`
+	Average        map[string]int `json:"average"`
+	Hits           hitWindowOut   `json:"hits"`
+	RecentFailDays int            `json:"recent_fail_days"`
 }
 
 type hitWindowOut struct {
@@ -240,7 +239,7 @@ func build(repo string, inv inventory.Inventory, src Sources, now time.Time) boa
 	d := boardData{
 		Meta: metaOut{
 			Repo: repo, Version: inv.Version, Generated: now.UTC(), Branch: src.Branch,
-			Criteria: criteriaOut{Average: settings.Average, Hits: hitWindowOut{Days: settings.HitDays, Last: settings.HitLast}},
+			Criteria: criteriaOut{Average: settings.Average, Hits: hitWindowOut{Days: settings.HitDays, Last: settings.HitLast}, RecentFailDays: settings.RecentFailDays},
 			Local:    spanOf(local),
 		},
 		Groups:        []groupOut{},
@@ -269,7 +268,7 @@ func build(repo string, inv inventory.Inventory, src Sources, now time.Time) boa
 	means, procs := aggregate(lines, settings.Average)
 	d.Processes = procs
 	hits := record.Hits(window(lines, now, settings))
-	onBranch, recentFail := flags(lines, ix, src.Branch, now)
+	onBranch, recentFail := flags(lines, ix, src.Branch, now.AddDate(0, 0, -settings.RecentFailDays))
 
 	for _, e := range inv.Verifications {
 		k := e.Key().String()
@@ -510,9 +509,8 @@ func window(lines []record.Line, now time.Time, s inventory.Settings) []record.L
 }
 
 // flags reports, per verification key, whether it has a result on the current
-// branch and whether it failed recently.
-func flags(lines []record.Line, ix index, branch string, now time.Time) (onBranch, recentFail map[string]bool) {
-	cutoff := now.AddDate(0, 0, -recentFailDays)
+// branch and whether it failed at or after cutoff.
+func flags(lines []record.Line, ix index, branch string, cutoff time.Time) (onBranch, recentFail map[string]bool) {
 	onBranch, recentFail = map[string]bool{}, map[string]bool{}
 	for _, l := range lines {
 		if l.Kind != record.KindResult || l.Key == "" {

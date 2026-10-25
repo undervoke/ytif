@@ -10,7 +10,7 @@
 
 const D = JSON.parse(document.getElementById("data").textContent);
 const META = D.meta || {};
-const CRITERIA = META.criteria || { average: {}, hits: { days: 365 } };
+const CRITERIA = META.criteria || { average: {}, hits: { days: 365 }, recent_fail_days: 30 };
 
 // ---- text ----
 const T = {
@@ -37,7 +37,7 @@ const T = {
     searchList: "Find by impact, accident, detection, verification name, command, or unit",
     gates: "Gates", hitGroup: "Hit", hitYes: "yes", hitNo: "no",
     avgGroup: "Average sum", atLeast: v => `≥ ${v}`,
-    stateGroup: "State", stateNoSample: "no time samples", stateBranch: "ran on this branch", stateFail: "failed in the last 30 days",
+    stateGroup: "State", stateNoSample: "no time samples", stateBranch: "ran on this branch", stateFail: `failed in the last ${CRITERIA.recent_fail_days} days`,
     membershipNote: "Every verification belongs to CI and, unless skip-push, to push. check and commit are independent opt-ins.",
     colImpact: "Impact · verification", colUnit: "Execution unit", colWhat: "Task · runner · unit", colAvg: "Average sum",
     more: (k, r) => `${k} more · ${r} left`,
@@ -63,7 +63,7 @@ const T = {
     diagramCostHint: "Mean (hit) · Hover a cell for its timed sample count", diagramProcess: "View in process time →",
     diagramFileHint: "Select the file to list its verifications and those in its included files",
     diagramTagHint: "Open verifications filtered by this tag", diagramPeerMeta: (sum, hits) => `Average sum ${sum} · hit ${hits}`,
-    diagramBranchHint: "Has results from a run on the current branch", diagramFailHint: "Failed within the last 30 days across all branches. This does not mean it is still failing.",
+    diagramBranchHint: "Has results from a run on the current branch", diagramFailHint: `Failed within the last ${CRITERIA.recent_fail_days} days across all branches. This does not mean it is still failing.`,
     diagramNoSampleHint: "No timed results in its current member gates",
     diagramRequiresHint: "Verifications this verification depends on", diagramRequiredByHint: "Verifications that depend on this verification",
     diagramEnsuresHint: "Verifications this verification keeps working", diagramEnsuredByHint: "Verifications that keep this verification working",
@@ -96,7 +96,7 @@ const T = {
     searchList: "영향, 사고, 탐지, 검증 이름, 명령, 실행 단위로 찾기",
     gates: "gate", hitGroup: "hit", hitYes: "있음", hitNo: "없음",
     avgGroup: "평균 합", atLeast: v => `${v} 이상`,
-    stateGroup: "상태", stateNoSample: "시간 표본 없음", stateBranch: "이 branch에서 실행됨", stateFail: "최근 30일 fail",
+    stateGroup: "상태", stateNoSample: "시간 표본 없음", stateBranch: "이 branch에서 실행됨", stateFail: `최근 ${CRITERIA.recent_fail_days}일 fail`,
     membershipNote: "모든 검증은 CI에 속하고, skip-push가 아니면 push에도 속합니다. check와 commit은 각각 지정합니다.",
     colImpact: "영향 · 검증", colUnit: "실행 단위", colWhat: "작업 · runner · 실행 단위", colAvg: "평균 합",
     more: (k, r) => `${k}개 더 보기 · ${r}개 남음`,
@@ -122,7 +122,7 @@ const T = {
     diagramCostHint: "평균 (hit) · 칸에 올리면 시간 표본 수", diagramProcess: "프로세스 시간에서 보기 →",
     diagramFileHint: "파일을 누르면 이 파일과 하위 파일의 검증 목록",
     diagramTagHint: "이 태그로 걸러진 검증 목록으로", diagramPeerMeta: (sum, hits) => `평균 합 ${sum} · hit ${hits}`,
-    diagramBranchHint: "현재 branch의 실행에 결과가 있음", diagramFailHint: "모든 branch의 기록에서 최근 30일 안에 fail이 있음. 지금도 실패 중이라는 뜻은 아님",
+    diagramBranchHint: "현재 branch의 실행에 결과가 있음", diagramFailHint: `모든 branch의 기록에서 최근 ${CRITERIA.recent_fail_days}일 안에 fail이 있음. 지금도 실패 중이라는 뜻은 아님`,
     diagramNoSampleHint: "지금 소속된 gate에 시간이 기록된 결과가 없음",
     diagramRequiresHint: "이 검증이 의존하는 검증", diagramRequiredByHint: "이 검증에 의존하는 검증",
     diagramEnsuresHint: "이 검증이 계속 동작하도록 지켜 주는 검증", diagramEnsuredByHint: "이 검증을 지켜 주는 검증",

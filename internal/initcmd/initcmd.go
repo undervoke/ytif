@@ -452,7 +452,7 @@ func plan(root string, hosts []string, local bool) ([]file, []error) {
 	if _, err := inventory.LoadInventory(root); err != nil {
 		errs = append(errs, err)
 	} else {
-		add(skeleton(root, inventory.InventoryFile, "version: 3\nverifications: []\n"))
+		add(skeleton(root, inventory.InventoryFile, ledgerText()))
 	}
 	add(lefthook(root, wired))
 	var actions []string
@@ -521,6 +521,22 @@ func read(root, rel string) ([]byte, bool, error) {
 }
 
 // skeleton keeps an existing file and creates a missing one.
+// ledgerText is a new ledger. It lists the board windows as a comment, read
+// from the defaults the board applies, so a project can find what it may set.
+func ledgerText() string {
+	d := inventory.BoardConfig{}.Settings()
+	a := d.Average
+	return fmt.Sprintf(`version: 3
+# board:  # statistics windows; an omitted value keeps the default shown
+#   average: {check: %d, commit: %d, push: %d, ci: %d}  # timed results per mean
+#   hits:
+#     days: %d  # how far back hits are counted
+#     last: {}  # per gate, count hits only in its latest N attempts, e.g. {commit: 50}
+#   recent_fail_days: %d  # how far back a fail marks a verification
+verifications: []
+`, a[check.GateCheck], a[check.GateCommit], a[check.GatePush], a[check.GateCI], d.HitDays, d.RecentFailDays)
+}
+
 func skeleton(root, rel, text string) (file, error) {
 	have, ok, err := read(root, rel)
 	if err != nil {

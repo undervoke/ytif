@@ -52,8 +52,9 @@ type Inventory struct {
 // BoardConfig sets the statistics windows the board uses. Zero values keep
 // the defaults, so a ledger states only what differs.
 type BoardConfig struct {
-	Average GateCounts `yaml:"average,omitempty"`
-	Hits    HitWindow  `yaml:"hits,omitempty"`
+	Average        GateCounts `yaml:"average,omitempty"`
+	Hits           HitWindow  `yaml:"hits,omitempty"`
+	RecentFailDays int        `yaml:"recent_fail_days,omitempty"`
 }
 
 // GateCounts counts something per gate. Strict decoding rejects a misnamed
@@ -74,9 +75,10 @@ type HitWindow struct {
 
 // Settings are the board windows with the defaults applied.
 type Settings struct {
-	Average map[string]int // gate → timed samples the mean uses
-	HitDays int            // how far back a hit is counted
-	HitLast map[string]int // gate → latest attempts a hit is counted in
+	Average        map[string]int // gate → timed samples the mean uses
+	HitDays        int            // how far back a hit is counted
+	HitLast        map[string]int // gate → latest attempts a hit is counted in
+	RecentFailDays int            // how far back a fail marks a verification
 }
 
 // Defaults for the board windows.
@@ -84,13 +86,14 @@ const (
 	defaultAverage   = 100 // timed samples per verification and gate
 	defaultCIAverage = 10  // ci runs cost orders of magnitude more
 	defaultHitDays   = 365
+	defaultFailDays  = 30
 )
 
 // Settings resolves the board windows. An unset average is 100 timed samples
-// per gate and 10 for ci, an unset hit window 365 days, and an unset per-gate
-// hit limit counts every attempt.
+// per gate and 10 for ci, an unset hit window 365 days, an unset per-gate hit
+// limit counts every attempt, and an unset fail window 30 days.
 func (b BoardConfig) Settings() Settings {
-	s := Settings{Average: map[string]int{}, HitDays: b.Hits.Days, HitLast: map[string]int{}}
+	s := Settings{Average: map[string]int{}, HitDays: b.Hits.Days, HitLast: map[string]int{}, RecentFailDays: b.RecentFailDays}
 	for gate, n := range b.Average.byGate() {
 		if n == 0 {
 			n = defaultAverage
@@ -102,6 +105,9 @@ func (b BoardConfig) Settings() Settings {
 	}
 	if s.HitDays == 0 {
 		s.HitDays = defaultHitDays
+	}
+	if s.RecentFailDays == 0 {
+		s.RecentFailDays = defaultFailDays
 	}
 	for gate, n := range b.Hits.Last.byGate() {
 		if n > 0 {
@@ -138,6 +144,9 @@ func (b BoardConfig) validate() error {
 	}
 	if b.Hits.Days < 0 {
 		return fmt.Errorf("hits: days %d: want 0 or more", b.Hits.Days)
+	}
+	if b.RecentFailDays < 0 {
+		return fmt.Errorf("recent_fail_days %d: want 0 or more", b.RecentFailDays)
 	}
 	return nil
 }
