@@ -7,6 +7,8 @@ module proxy may already have cached that version.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-25
+
 ### Added
 
 - `board:` takes `recent_fail_days`, how far back a fail marks a verification as recently failed (default 30).
@@ -181,7 +183,8 @@ Existing `version: 2` inventories remain compatible. `commands:` is optional and
 
 - Checks run without the hook repository's git environment variables.
 
-[Unreleased]: https://github.com/undervoke/ytif/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/undervoke/ytif/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/undervoke/ytif/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/undervoke/ytif/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/undervoke/ytif/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/undervoke/ytif/compare/v0.8.0...v0.9.0
