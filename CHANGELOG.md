@@ -7,6 +7,8 @@ module proxy may already have cached that version.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-26
+
 ### Added
 
 - `board.scales` sets the time bars' ticks in milliseconds, `verification` for single verifications and `unit` for unit, file, and process totals; each interval takes an equal width. The verification page's execution-unit rows extend the verification ticks tenfold until they cover the largest total.
@@ -194,7 +196,8 @@ Existing `version: 2` inventories remain compatible. `commands:` is optional and
 
 - Checks run without the hook repository's git environment variables.
 
-[Unreleased]: https://github.com/undervoke/ytif/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/undervoke/ytif/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/undervoke/ytif/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/undervoke/ytif/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/undervoke/ytif/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/undervoke/ytif/compare/v0.9.0...v0.10.0
