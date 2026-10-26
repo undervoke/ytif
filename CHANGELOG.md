@@ -7,6 +7,8 @@ module proxy may already have cached that version.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-26
+
 ### Added
 
 - `board.half_life_percent` sets how fast a result's weight fades in a board mean: it halves every that percent of the gate's `average` window (default 50).
@@ -216,7 +218,8 @@ Existing `version: 2` inventories remain compatible. `commands:` is optional and
 
 - Checks run without the hook repository's git environment variables.
 
-[Unreleased]: https://github.com/undervoke/ytif/compare/v0.13.1...HEAD
+[Unreleased]: https://github.com/undervoke/ytif/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/undervoke/ytif/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/undervoke/ytif/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/undervoke/ytif/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/undervoke/ytif/compare/v0.11.0...v0.12.0
