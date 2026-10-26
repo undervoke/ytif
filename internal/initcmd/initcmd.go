@@ -529,6 +529,7 @@ func ledgerText() string {
 	return fmt.Sprintf(`version: 3
 # board:  # statistics windows; an omitted value keeps the default shown
 #   average: {check: %d, commit: %d, push: %d, ci: %d}  # timed results per mean
+#   half_life_percent: %d  # a result's weight halves every this percent of its average window
 #   hits:
 #     days: %d  # how far back hits are counted
 #     last: {}  # per gate, count hits only in its latest N attempts, e.g. {commit: 50}
@@ -537,7 +538,7 @@ func ledgerText() string {
 #     verification: %s
 #     unit: %s  # group and process totals
 verifications: []
-`, a[check.GateCheck], a[check.GateCommit], a[check.GatePush], a[check.GateCI], d.HitDays, d.RecentFailDays, ticksText(d.Scales.Verification), ticksText(d.Scales.Unit))
+`, a[check.GateCheck], a[check.GateCommit], a[check.GatePush], a[check.GateCI], d.HalfLife, d.HitDays, d.RecentFailDays, ticksText(d.Scales.Verification), ticksText(d.Scales.Unit))
 }
 
 // ticksText writes ticks as a YAML flow list.

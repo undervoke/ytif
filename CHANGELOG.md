@@ -7,8 +7,13 @@ module proxy may already have cached that version.
 
 ## [Unreleased]
 
+### Added
+
+- `board.half_life_percent` sets how fast a result's weight fades in a board mean: it halves every that percent of the gate's `average` window (default 50).
+
 ### Changed
 
+- Board means weight each gate's last N timed results toward the newest instead of weighing them equally.
 - Time bars draw the ticks under their fill on top of it. The gate summary card's bars share a time scale with ticks instead of filling the width.
 
 ### Fixed

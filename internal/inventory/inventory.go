@@ -52,10 +52,11 @@ type Inventory struct {
 // BoardConfig sets the statistics windows the board uses. Zero values keep
 // the defaults, so a ledger states only what differs.
 type BoardConfig struct {
-	Average        GateCounts `yaml:"average,omitempty"`
-	Hits           HitWindow  `yaml:"hits,omitempty"`
-	RecentFailDays int        `yaml:"recent_fail_days,omitempty"`
-	Scales         Scales     `yaml:"scales,omitempty"`
+	Average         GateCounts `yaml:"average,omitempty"`
+	HalfLifePercent int        `yaml:"half_life_percent,omitempty"`
+	Hits            HitWindow  `yaml:"hits,omitempty"`
+	RecentFailDays  int        `yaml:"recent_fail_days,omitempty"`
+	Scales          Scales     `yaml:"scales,omitempty"`
 }
 
 // Scales are the tick values, in milliseconds, that the board's time bars
@@ -86,6 +87,7 @@ type HitWindow struct {
 // Settings are the board windows with the defaults applied.
 type Settings struct {
 	Average        map[string]int // gate → timed samples the mean uses
+	HalfLife       int            // percent of a gate's average window over which a sample's weight halves
 	HitDays        int            // how far back a hit is counted
 	HitLast        map[string]int // gate → latest attempts a hit is counted in
 	RecentFailDays int            // how far back a fail marks a verification
@@ -96,6 +98,7 @@ type Settings struct {
 const (
 	defaultAverage   = 100 // timed samples per verification and gate
 	defaultCIAverage = 10  // ci runs cost orders of magnitude more
+	defaultHalfLife  = 50  // percent of the average window
 	defaultHitDays   = 365
 	defaultFailDays  = 30
 )
@@ -107,10 +110,14 @@ var (
 )
 
 // Settings resolves the board windows. An unset average is 100 timed samples
-// per gate and 10 for ci, an unset hit window 365 days, an unset per-gate hit
+// per gate and 10 for ci, an unset half-life 50 percent of that window, an
+// unset hit window 365 days, an unset per-gate hit
 // limit counts every attempt, and an unset fail window 30 days.
 func (b BoardConfig) Settings() Settings {
-	s := Settings{Average: map[string]int{}, HitDays: b.Hits.Days, HitLast: map[string]int{}, RecentFailDays: b.RecentFailDays, Scales: b.Scales}
+	s := Settings{Average: map[string]int{}, HalfLife: b.HalfLifePercent, HitDays: b.Hits.Days, HitLast: map[string]int{}, RecentFailDays: b.RecentFailDays, Scales: b.Scales}
+	if s.HalfLife == 0 {
+		s.HalfLife = defaultHalfLife
+	}
 	if len(s.Scales.Verification) == 0 {
 		s.Scales.Verification = defaultVerificationScale
 	}
@@ -164,6 +171,9 @@ func (b BoardConfig) validate() error {
 				return fmt.Errorf("%s: %s %d: want 0 or more", f.field, n.gate, n.v)
 			}
 		}
+	}
+	if b.HalfLifePercent < 0 {
+		return fmt.Errorf("half_life_percent %d: want 0 or more", b.HalfLifePercent)
 	}
 	if b.Hits.Days < 0 {
 		return fmt.Errorf("hits: days %d: want 0 or more", b.Hits.Days)

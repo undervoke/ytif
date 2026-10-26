@@ -28,7 +28,7 @@ const T = {
     srcLegacy: size => `legacy file ${size} (outside the managed cap)`,
     srcOverage: size => `managed storage ${size} over budget`, srcMaintenance: error => `maintenance deferred: ${error}`,
     gateTitle: "Verification time per gate", avg: "Average", branch: "Branch", noBranch: "(no branch)", noItem: "(no item)",
-    criteriaAvg: "Average", criteriaAvgText: "Mean of the last N timed results per verification and gate, and per process and gate.",
+    criteriaAvg: "Average", criteriaAvgText: "Mean of the last N timed results per verification and gate, and per process and gate, weighted toward recent results.", criteriaHalfLife: p => `weight halves every ${p}% of N`,
     criteriaBranch: "Branch", criteriaBranchText: "Each gate's latest run on the current branch: the sum of its timed results.",
     criteriaHit: "Hit", criteriaHitText: "A fail counts once; fails until the next pass do not count.",
     criteriaHitCI: "ci counts the received CI records.", criteriaHitLast: (g, n) => `${g} counts its latest ${n} runs`,
@@ -91,7 +91,7 @@ const T = {
     srcLegacy: size => `기존 파일 ${size} (관리 용량 한도와 별도)`,
     srcOverage: size => `관리 기록 용량 ${size} 초과`, srcMaintenance: error => `정리 보류: ${error}`,
     gateTitle: "gate별 검증 시간 합", avg: "평균", branch: "branch 기준", noBranch: "(branch 없음)", noItem: "(항목 없음)",
-    criteriaAvg: "평균", criteriaAvgText: "검증×gate별, 프로세스×gate별 시간이 기록된 최근 N회 평균",
+    criteriaAvg: "평균", criteriaAvgText: "검증×gate별, 프로세스×gate별 시간이 기록된 최근 N회를 최근일수록 무겁게 평균", criteriaHalfLife: p => `가중치는 N의 ${p}%마다 절반`,
     criteriaBranch: "branch 기준", criteriaBranchText: "현재 branch에서 gate별 마지막 실행 1회의 검증 시간 합",
     criteriaHit: "hit", criteriaHitText: "fail을 1회로 세고, 다음 pass까지의 fail은 세지 않음",
     criteriaHitCI: "ci는 받은 CI 기록 기준", criteriaHitLast: (g, n) => `${g}은 최근 ${n}회 실행 기준`,
@@ -531,7 +531,7 @@ function criteriaHTML() {
   const to = META.generated ? day(META.generated) : "";
   const from = META.generated ? day(new Date(Date.parse(META.generated) - (CRITERIA.hits?.days || 365) * 864e5)) : "";
   const last = Object.entries(CRITERIA.hits?.last || {}).map(([g, n]) => t("criteriaHitLast", g, fmt(n)));
-  return `<div><b>${esc(t("criteriaAvg"))}</b><span>${esc(t("criteriaAvgText"))}</span><span class="note">${esc(ns)}</span></div>
+  return `<div><b>${esc(t("criteriaAvg"))}</b><span>${esc(t("criteriaAvgText"))}</span><span class="note">${esc(ns)}</span><span class="note">${esc(t("criteriaHalfLife", CRITERIA.half_life_percent))}</span></div>
     <div><b>${esc(t("criteriaBranch"))}</b><span>${esc(t("criteriaBranchText"))}</span></div>
     <div><b>${esc(t("criteriaHit"))}</b><span>${esc(from)} – ${esc(to)}</span><span>${esc(t("criteriaHitText"))}</span><span class="note">${esc(t("criteriaHitCI"))}</span>${last.map(l => `<span class="note">${esc(l)}</span>`).join("")}</div>`;
 }

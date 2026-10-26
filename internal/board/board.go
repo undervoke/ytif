@@ -9,6 +9,7 @@ import (
 	"embed"
 	"encoding/json"
 	"io/fs"
+	"math"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -187,10 +188,11 @@ type spanOut struct {
 }
 
 // criteriaOut states the windows the page's figures use: the timed samples a
-// mean keeps per gate, the population a hit is counted in, and how far back a
-// fail marks a verification.
+// mean keeps per gate and how fast their weight halves, the population a hit
+// is counted in, and how far back a fail marks a verification.
 type criteriaOut struct {
 	Average        map[string]int `json:"average"`
+	HalfLife       int            `json:"half_life_percent"`
 	Hits           hitWindowOut   `json:"hits"`
 	RecentFailDays int            `json:"recent_fail_days"`
 	Scales         scalesOut      `json:"scales"`
@@ -249,7 +251,7 @@ func build(repo string, inv inventory.Inventory, src Sources, now time.Time) boa
 	d := boardData{
 		Meta: metaOut{
 			Repo: repo, Version: inv.Version, Generated: now.UTC(), Branch: src.Branch,
-			Criteria:     criteriaOut{Average: settings.Average, Hits: hitWindowOut{Days: settings.HitDays, Last: settings.HitLast}, RecentFailDays: settings.RecentFailDays, Scales: scalesOut{Unit: settings.Scales.Unit, Verification: settings.Scales.Verification}},
+			Criteria:     criteriaOut{Average: settings.Average, HalfLife: settings.HalfLife, Hits: hitWindowOut{Days: settings.HitDays, Last: settings.HitLast}, RecentFailDays: settings.RecentFailDays, Scales: scalesOut{Unit: settings.Scales.Unit, Verification: settings.Scales.Verification}},
 			Local:        spanOf(local),
 			LocalStorage: src.LocalStorage,
 		},
@@ -277,7 +279,7 @@ func build(repo string, inv inventory.Inventory, src Sources, now time.Time) boa
 		d.Groups = append(d.Groups, group(g, "project"))
 	}
 
-	means, procs := aggregate(lines, settings.Average)
+	means, procs := aggregate(lines, settings.Average, settings.HalfLife)
 	d.Processes = procs
 	hits := record.Hits(window(lines, now, settings))
 	onBranch, recentFail := flags(lines, ix, src.Branch, now.AddDate(0, 0, -settings.RecentFailDays))
@@ -382,7 +384,7 @@ func summarize(s inventory.Settings, vs []verificationOut, means map[string]map[
 
 // aggregate averages timed results per verification and gate, and timed
 // invocations per process. Samples are already in time order.
-func aggregate(lines []record.Line, limit map[string]int) (map[string]map[string]meanOut, []processOut) {
+func aggregate(lines []record.Line, limit map[string]int, halfLife int) (map[string]map[string]meanOut, []processOut) {
 	type procID struct{ runner, what, unit string }
 	samples := map[string]map[string][]int64{}
 	procSamples := map[procID]map[string][]int64{}
@@ -409,7 +411,7 @@ func aggregate(lines []record.Line, limit map[string]int) (map[string]map[string
 	}
 	means := map[string]map[string]meanOut{}
 	for key, byGate := range samples {
-		means[key] = meansOf(byGate, limit)
+		means[key] = meansOf(byGate, limit, halfLife)
 	}
 	type process struct {
 		processOut
@@ -417,7 +419,7 @@ func aggregate(lines []record.Line, limit map[string]int) (map[string]map[string
 	}
 	var procs []process
 	for id, byGate := range procSamples {
-		m := meansOf(byGate, limit)
+		m := meansOf(byGate, limit, halfLife)
 		p := process{processOut: processOut{Runner: id.runner, What: id.what, Unit: id.unit, Means: m}}
 		for _, v := range m {
 			p.total += v.MS
@@ -443,18 +445,28 @@ func aggregate(lines []record.Line, limit map[string]int) (map[string]map[string
 	return means, out
 }
 
-// meansOf averages the last n samples per gate and keeps the count it used.
-func meansOf(samples map[string][]int64, limit map[string]int) map[string]meanOut {
+// meansOf averages the last n samples per gate, each weighted 0.5^(age/h)
+// where h is halfLife percent of n, and keeps the count it used. h follows the
+// window rather than the samples at hand, so a short history keeps the weights
+// a full one gives its newest samples.
+func meansOf(samples map[string][]int64, limit map[string]int, halfLife int) map[string]meanOut {
 	out := map[string]meanOut{}
 	for gate, vals := range samples {
-		if n := limit[gate]; n > 0 && len(vals) > n {
+		n := limit[gate]
+		if n <= 0 {
+			n = len(vals)
+		}
+		if len(vals) > n {
 			vals = vals[len(vals)-n:]
 		}
-		var sum int64
-		for _, v := range vals {
-			sum += v
+		h := float64(n) * float64(halfLife) / 100
+		var sum, weight float64
+		for i, v := range vals {
+			w := math.Pow(0.5, float64(len(vals)-1-i)/h)
+			sum += w * float64(v)
+			weight += w
 		}
-		out[gate] = meanOut{MS: sum / int64(len(vals)), K: len(vals)}
+		out[gate] = meanOut{MS: int64(math.Round(sum / weight)), K: len(vals)}
 	}
 	return out
 }
