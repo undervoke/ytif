@@ -75,6 +75,7 @@ thead th { background: var(--sunk); color: var(--muted); font-size: 12px; font-w
 .chip { font-size: 12px; padding: 1px 8px; border-radius: 4px; background: var(--sunk); color: var(--muted); white-space: nowrap }
 .chip.harm { color: var(--surface); font-weight: 600 }
 .chip.warn { background: var(--warn-bg); color: var(--warn-fg) }
+.morebar { display: flex; justify-content: center; padding: 12px 16px 16px }
 .btn { min-height: 36px; padding: 0 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--accent); cursor: pointer }
 .gates { display: flex; flex-wrap: wrap; gap: 4px }
 .gbadge { font-family: var(--font-mono); font-size: 11px; padding: 1px 7px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); opacity: 0.55; white-space: nowrap }

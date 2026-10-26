@@ -897,7 +897,7 @@ function timeBar(rows, ticks) {
     ink: !has ? "var(--muted)" : inside ? BAR_INK[used[used.length - 1]] : "var(--fg)",
     step: (100 / n).toFixed(3) + "%",
     ticks: ticks.slice(1).map((v, i) => ({ label: ms(v), at: i + 1 }))
-      .filter(k => has && k.at / n * 100 - 12 >= len * 100 + (inside ? 0 : 18))
+      .filter(k => has && k.at / n * 100 - 6 >= len * 100 + (inside ? 0 : 10))
       .map(k => ({ label: k.label, right: scaleRight(k.at, n) })),
   };
 }
@@ -976,6 +976,8 @@ function railInner(cur) {
 // ---- diagram page ----
 const PAGE = 5;
 const mm = { open: {}, key: null, full: false, basis: false };
+// the rail list's scroll a rail click carries into the next diagram
+let railScroll = null;
 function diagramPage(r) {
   vp = null;
   if (!VERIFICATIONS.length) { $("#page").innerHTML = `<p class="empty">${esc(t("noVerifications"))}</p>`; return }
@@ -994,6 +996,11 @@ function diagramPage(r) {
       <div class="dg"><div class="mm" id="mm"><svg class="wires" id="wires" aria-hidden="true"></svg>
         <div class="side left" id="left"></div><article class="core" id="core"></article><div class="side right" id="right"></div></div></div>
     </div>`;
+  // a rail click keeps the list where it was; any other arrival shows the selected row
+  const tree = $("#railtree"), on = tree?.querySelector('[data-rail-go][aria-current="true"]');
+  if (tree && railScroll != null) { tree.scrollTop = railScroll; on?.focus({ preventScroll: true }) }
+  else on?.scrollIntoView({ block: "nearest" });
+  railScroll = null;
 
   const core = $("#core");
   core.style.setProperty("--hc", hc(c));
@@ -1096,7 +1103,7 @@ function diagramPage(r) {
     const d = b.dataset;
     if ("railToggle" in d) { rail.open = !rail.open; board.dataset.rail = rail.open ? "open" : "closed"; drawRail(); scheduleWires(); return }
     if (d.railBy) { rail.by = d.railBy; rail.fold = {}; rail.more = {}; drawRail(); return }
-    if (d.railGo) { location.hash = href(d.railGo); return }
+    if (d.railGo) { if (b.getAttribute("aria-current") !== "true") { railScroll = $("#railtree").scrollTop; location.hash = href(d.railGo) } return }
     // a fold remembers the state it left, not the state it would default to
     if (d.railFold) { rail.fold[d.railFold] = b.getAttribute("aria-expanded") !== "true"; drawRailTree(); return }
     if (d.railMore) { rail.more[d.railMore] = (rail.more[d.railMore] || RAIL_PAGE) + RAIL_PAGE; drawRailTree(); return }

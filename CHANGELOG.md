@@ -7,6 +7,11 @@ module proxy may already have cached that version.
 
 ## [Unreleased]
 
+### Fixed
+
+- The verification table's "more" button sits centered below the table.
+- Choosing a verification in the diagram rail keeps the rail's scroll position.
+
 ## [0.13.1] - 2026-10-26
 
 ### Fixed
