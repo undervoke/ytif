@@ -509,16 +509,18 @@ function gateSumHTML() {
   const sum = rows => rows.reduce((s, r) => s + (r.ms || 0), 0);
   const avgTotal = sum(avg), branchTotal = sum(branch);
   const totalText = (rows, n) => rows.some(r => r.ms != null) ? ms(n) : "–";
-  const bar = (rows, total) => `<span class="gbar">${total ? rows.map(r => r.ms ? `<span style="width:${(r.ms / total) * 100}%;background:${gateColor(r.gate)}"></span>` : "").join("") : ""}</span>`;
+  // both bars share one scale, so their lengths compare; the total stands beside them
+  const scale = coverTicks(SUM_TICKS, Math.max(avgTotal, branchTotal));
+  const bar = rows => barHTML(timeBar(rows.filter(r => r.ms != null).map(r => ({ means: { [r.gate]: { ms: r.ms } } })), scale, true));
   const items = (rows, withTime) => rows.length ? `<div class="gitems">${rows.map(r =>
     `<span><i style="background:${gateColor(r.gate)}"></i><span class="note">${esc(r.gate)}</span><b>${r.ms == null ? "–" : ms(r.ms)}</b>${r.hits ? `<b>(${fmt(r.hits)})</b>` : ""}${withTime ? `<span class="note">${esc(when(r.time))}</span>` : ""}</span>`).join("")}</div>`
     : `<div class="gitems"><span class="note">${esc(t("noItem"))}</span></div>`;
   return `<section class="gatesum card">
     <div class="ghead"><b>${esc(t("gateTitle"))}</b><span class="glegend">${GATES.map(g => `<span><i style="background:${gateColor(g)}"></i>${esc(g)}</span>`).join("")}</span></div>
     <div class="grow">
-      <span class="glabel">${esc(t("avg"))}</span>${bar(avg, avgTotal)}<b class="gtotal">${totalText(avg, avgTotal)}</b>
+      <span class="glabel">${esc(t("avg"))}</span>${bar(avg)}<b class="gtotal">${totalText(avg, avgTotal)}</b>
       <span class="gsp"></span>${items(avg, false)}<span class="gsp"></span>
-      <span class="glabel">${esc(t("branch"))}<code>${esc(META.branch || t("noBranch"))}</code></span>${bar(branch, branchTotal)}<b class="gtotal">${totalText(branch, branchTotal)}</b>
+      <span class="glabel">${esc(t("branch"))}<code>${esc(META.branch || t("noBranch"))}</code></span>${bar(branch)}<b class="gtotal">${totalText(branch, branchTotal)}</b>
       <span class="gsp"></span>${items(branch, true)}<span class="gsp"></span>
     </div>
   </section>`;
@@ -865,10 +867,12 @@ const railTagHit = (c, except) => GROUPS.every(g => g.name === except ||
   !rail.tags.some(tg => TAG[tg] && TAG[tg].group === g.name) ||
   rail.tags.some(tg => TAG[tg] && TAG[tg].group === g.name && c.tags.includes(tg)));
 
-// A time bar prints its ticks inside the track and its fill covers them; the
-// value sits inside the filled end when it fits, and just past it otherwise,
-// where it takes the first tick label's place. A tick label shows only while
-// neither the fill nor the value reaches it. The ticks come from the ledger's
+// A time bar prints its ticks inside the track; the value sits inside the
+// filled end when it fits, and just past it otherwise, where it takes the
+// first tick label's place. Ticks under the fill are drawn on top of it in the
+// ink of the segment beneath, so the scale stays readable; a tick label shows
+// unless the value overlaps it, and a bare bar leaves its value to the caller
+// and keeps only the fill's edge clear. The ticks come from the ledger's
 // board scales (ms): every interval between neighbors takes an equal width,
 // and a value past the last tick fills the bar. A verification uses
 // ROW_TICKS; group and process totals use SUM_TICKS.
@@ -886,23 +890,28 @@ const scaleRight = (i, n) => i === n ? "3px" : `calc(${(((n - i) / n) * 100).toF
 // the fill covers the scale, so the value takes the ink of the segment under it
 const BAR_INK = { check: "var(--ink-check)", commit: "var(--ink-commit)", push: "var(--ink-push)", ci: "var(--ink-ci)" };
 // a sampled 0ms is a time; only rows without samples read as empty
-function timeBar(rows, ticks) {
+function timeBar(rows, ticks, bare) {
   const byGate = gateMs(rows), total = GATES.reduce((s, g) => s + byGate[g], 0), has = rows.some(sampled);
   const len = has ? tickPos(total, ticks) : 0, n = ticks.length - 1;
   const used = GATES.filter(g => byGate[g] > 0), pct = (len * 100).toFixed(2) + "%", inside = len >= 0.17;
+  // the value's span in percent of the bar, inside the filled end or just past it
+  const fill = len * 100, value = bare ? [fill, fill] : inside ? [fill - 10, fill] : [fill, fill + 10];
+  const inkAt = p => { let end = 0; for (const g of used) { end += len * byGate[g] / total * 100; if (p <= end + 1e-6) return BAR_INK[g] } return "" };
+  const at = ticks.slice(1).map((v, i) => ({ label: ms(v), i: i + 1, p: (i + 1) / n * 100 }));
   return {
     segs: used.map(g => ({ color: gateColor(g), width: (len * byGate[g] / total * 100).toFixed(2) + "%" })),
-    sum: has ? ms(total) : t("noTimeSamples"),
+    sum: bare ? "" : has ? ms(total) : t("noTimeSamples"),
     left: inside ? "auto" : pct, right: inside ? `calc(100% - ${pct})` : "auto",
     ink: !has ? "var(--muted)" : inside ? BAR_INK[used[used.length - 1]] : "var(--fg)",
     step: (100 / n).toFixed(3) + "%",
-    ticks: ticks.slice(1).map((v, i) => ({ label: ms(v), at: i + 1 }))
-      .filter(k => has && k.at / n * 100 - 6 >= len * 100 + (inside ? 0 : 10))
-      .map(k => ({ label: k.label, right: scaleRight(k.at, n) })),
+    ticks: at.filter(k => has && (k.p - 6 >= value[1] || k.p <= value[0]))
+      .map(k => ({ label: k.label, right: scaleRight(k.i, n), ink: k.p <= fill ? inkAt(k.p) : "" })),
+    marks: has ? at.filter(k => k.p < Math.min(fill, value[0])).map(k => ({ left: `calc(${k.p.toFixed(2)}% - 1px)`, ink: inkAt(k.p) })) : [],
   };
 }
 const gateMs = rows => Object.fromEntries(GATES.map(g => [g, rows.reduce((s, c) => s + (c.means?.[g]?.ms || 0), 0)]));
-const barHTML = b => `<span class="tbar" style="--step:${b.step}">${b.ticks.map(k => `<span class="tick" style="right:${k.right}">${esc(k.label)}</span>`).join("")}<span class="segs">${b.segs.map(s => `<span style="width:${s.width};background:${s.color}"></span>`).join("")}</span><span class="value" style="left:${b.left};right:${b.right};color:${b.ink}">${esc(b.sum)}</span></span>`;
+const tickHTML = k => `<span class="tick" style="right:${k.right}${k.ink ? `;color:${k.ink}` : ""}">${esc(k.label)}</span>`;
+const barHTML = b => `<span class="tbar" style="--step:${b.step}">${b.ticks.filter(k => !k.ink).map(tickHTML).join("")}<span class="segs">${b.segs.map(s => `<span style="width:${s.width};background:${s.color}"></span>`).join("")}</span>${b.marks.map(m => `<span class="mark" style="left:${m.left};background:${m.ink}"></span>`).join("")}${b.ticks.filter(k => k.ink).map(tickHTML).join("")}<span class="value" style="left:${b.left};right:${b.right};color:${b.ink}">${esc(b.sum)}</span></span>`;
 const railChev = `<span class="rchev" aria-hidden="true"><svg><use href="#i-chevron"/></svg></span>`;
 
 // railTree draws the list and counts what it shows. A heading folds like a

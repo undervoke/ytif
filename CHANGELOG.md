@@ -7,6 +7,10 @@ module proxy may already have cached that version.
 
 ## [Unreleased]
 
+### Changed
+
+- Time bars draw the ticks under their fill on top of it. The gate summary card's bars share a time scale with ticks instead of filling the width.
+
 ### Fixed
 
 - The verification table's "more" button sits centered below the table.
