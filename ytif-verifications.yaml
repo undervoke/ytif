@@ -1,4 +1,9 @@
 version: 3
+gate:
+  check: {scope: file}
+  commit: {scope: file}
+  push: {scope: full}
+  ci: {scope: full}
 verifications:
   - runner: command
     name: documentation

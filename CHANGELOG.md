@@ -7,6 +7,28 @@ module proxy may already have cached that version.
 
 ## [Unreleased]
 
+### Added
+
+- Mandatory `gate:` ledger policy: per-gate scope (`file`, `affected`, `full`) with optional named CI profiles carrying scope and comparison target. `push` maps to one profile with `ci-profile` to preview that profile's CI selection, and entries override the policy per gate or per CI profile with `scope:`.
+- First native file targeting: ESLint 10 with literal operands and simple JavaScript configs runs on changed files. Static relative helpers are tracked; Node builtins and installed packages are left to Node. Workspace imports, TS configs, URL references, symlinks and other unmodeled forms run full with a reason. Config, ignore, manifest and lockfile changes widen repository-wide; a valid empty target set skips.
+- Records carry the requested and resolved scope, reason, comparison, profile, and verifier-reported scope per verification; board means and hits are unchanged.
+
+### Changed
+
+- **Breaking:** a ledger without `gate:` fails to load. `ytif init` writes the defaults (`file` for check and commit, `full` for push and CI) and fills missing gate settings while preserving existing ledger settings.
+- `--base` (with `--head` and `--target-branch` on CI) only chooses the comparison diff; scope comes from the ledger, so `--base` alone no longer selects Nx-affected verifications.
+- **Breaking:** Node verifiers receive `gate`, `profile`, `selection`, and optional `report()` instead of `mode`/`base`/`head`. Process metadata uses `YTIF_GATE`, `YTIF_PROFILE`, `YTIF_SCOPE`, and `YTIF_COMPARE_KIND/BASE/HEAD`; local index/worktree comparisons have no commit head. Node calls preserve key order but separate module state across contiguous process-context boundaries.
+
+### Fixed
+
+- Node verifier cancellation no longer records abort-triggered passes or failures as completed outcomes.
+
+### Upgrade
+
+Rerun `ytif init` to add the missing `gate:` section, then set CI profile targets and any entry `scope:` overrides the project needs. Init never rewrites an existing workflow; keep `fetch-depth: 0` where narrowing should apply.
+A post-merge CI whose target equals HEAD compares nothing, so keep that profile full or pass an explicit comparison naming the intended range.
+Update self-targeting verifiers to consume the resolved context and report their actual scope; a full policy requires their full-domain execution rather than an independent affected command. Shared workspace ESLint configs may run full under the conservative targeting subset. Static imports do not establish rule locality or reveal arbitrary runtime file reads.
+
 ## [0.14.0] - 2026-10-26
 
 ### Added

@@ -23,6 +23,7 @@ var ErrInterrupted = errors.New("interrupted")
 
 type limitKey struct{}
 type environmentKey struct{}
+type gitEnvironmentKey struct{}
 
 // WithEnvironment carries a gate's execution context into all source processes.
 func WithEnvironment(ctx context.Context, env []string) context.Context {
@@ -51,7 +52,10 @@ func Run(ctx context.Context, cmd *exec.Cmd) (time.Duration, error) {
 	}
 	start := time.Now()
 	isolate(cmd)
-	cmd.Env = withoutRepositoryEnv(cmd.Environ())
+	cmd.Env = cmd.Environ()
+	if keep, _ := ctx.Value(gitEnvironmentKey{}).(bool); !keep {
+		cmd.Env = withoutRepositoryEnv(cmd.Env)
+	}
 	if env, ok := ctx.Value(environmentKey{}).([]string); ok {
 		cmd.Env = append(cmd.Env, env...)
 	}
@@ -76,6 +80,12 @@ func Run(ctx context.Context, cmd *exec.Cmd) (time.Duration, error) {
 		return elapsed, fmt.Errorf("%w: %v", ErrInterrupted, err)
 	}
 	return elapsed, err
+}
+
+// RunGit retains the hook's Git context, including a temporary index used by
+// path-limited commits. Verification processes continue to use Run.
+func RunGit(ctx context.Context, cmd *exec.Cmd) (time.Duration, error) {
+	return Run(context.WithValue(ctx, gitEnvironmentKey{}, true), cmd)
 }
 
 // repositoryEnv lists git's local environment variables (git rev-parse

@@ -9,10 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/undervoke/ytif/internal/affected"
 	"github.com/undervoke/ytif/internal/check"
 	"github.com/undervoke/ytif/internal/gitx"
-	"github.com/undervoke/ytif/internal/inventory"
 	"github.com/undervoke/ytif/internal/proc"
 	"github.com/undervoke/ytif/internal/reconcile"
 	"github.com/undervoke/ytif/internal/record"
@@ -27,17 +25,20 @@ const (
 
 // Options configures one gate run.
 type Options struct {
-	Gate    string    // check, commit, push, or ci
-	Base    string    // affected comparison base; empty selects full
-	Jobs    int       // processes run at once; 0 means DefaultJobs
-	Report  string    // "" or "github"
-	Record  bool      // append records for this trigger
-	Records string    // "" means the managed <git-common-dir>/ytif/records/active.jsonl
-	Stdin   io.Reader // push only: pre-push ref lines
-	Stdout  io.Writer
-	Stderr  io.Writer
-	Sources []check.Source
-	Config  ConfigChecker
+	Gate         string
+	Base         string
+	Profile      string
+	Head         string
+	TargetBranch string
+	Jobs         int       // processes run at once; 0 means DefaultJobs
+	Report       string    // "" or "github"
+	Record       bool      // append records for this trigger
+	Records      string    // "" means the managed <git-common-dir>/ytif/records/active.jsonl
+	Stdin        io.Reader // push only: pre-push ref lines
+	Stdout       io.Writer
+	Stderr       io.Writer
+	Sources      []check.Source
+	Config       ConfigChecker
 }
 
 // DefaultJobs is how many processes a gate runs at once unless told.
@@ -63,86 +64,77 @@ func Run(ctx context.Context, root string, o Options) int {
 		}
 	}
 	ctx = proc.WithLimit(ctx, jobs)
-	snapshot, err := gitx.SelectionSnapshot(root, o.Gate, o.Base, o.Stdin)
-	if err != nil {
-		fmt.Fprintf(o.Stderr, "ytif: %v\n", err)
-		return ExitUsage
-	}
 	s, err := loadSurvey(ctx, root, o.Sources, o.Config, o.Stderr, jobs)
 	if err != nil {
 		fmt.Fprintf(o.Stderr, "ytif: %v\n", err)
 		return ExitUsage
 	}
 	defer s.Close()
-
+	policy, err := s.Inventory.Gate.Context(o.Gate, o.Profile)
+	if err != nil {
+		fmt.Fprintf(o.Stderr, "ytif: %v\n", err)
+		return ExitUsage
+	}
+	plans := requestedPlans(s, o.Gate, policy)
+	snapshot, err := gitx.GateSnapshot(ctx, root, gitx.ComparisonOptions{
+		Gate: o.Gate, Base: o.Base, Head: o.Head, TargetBranch: o.TargetBranch,
+		Remote: policy.Target.Remote, Branch: policy.Target.Branch,
+		NeedComparison: needsComparison(plans), Stdin: o.Stdin,
+	})
+	if err != nil {
+		fmt.Fprintf(o.Stderr, "ytif: %v\n", err)
+		return ExitUsage
+	}
 	in, err := bindInput(root, o, s.Repo.Tracked)
 	if err != nil {
 		fmt.Fprintf(o.Stderr, "ytif: %v\n", err)
 		return ExitUsage
 	}
-	mode := "full"
-	if o.Base != "" {
-		mode = "affected"
+	in.Profile, in.Plans, in.TargetTip = policy.Profile, plans, snapshot.Target.SHA
+	if snapshot.Comparison != nil {
+		in.Comparison = &check.Comparison{Kind: snapshot.Comparison.Kind, Base: snapshot.Comparison.Base, Head: snapshot.Comparison.Head}
 	}
+	ctx = proc.WithEnvironment(ctx, in.Environment())
 	selection := record.Selection{
-		RequestedMode:    mode,
-		EffectiveMode:    mode,
-		Branch:           snapshot.Branch,
-		Base:             snapshot.Base,
-		Head:             snapshot.Head,
-		Bases:            snapshot.Bases,
-		Tips:             snapshot.Tips,
-		MergeParents:     snapshot.MergeParents,
-		DirtyDigest:      snapshot.DirtyDigest,
-		RevisionMismatch: snapshot.RevisionMismatch,
-		Registered:       len(s.Inventory.Verifications),
-		Eligible:         []string{},
-		Selected:         []string{},
+		Profile: policy.Profile, Comparison: in.Comparison, Target: &snapshot.Target, ContextSource: snapshot.ContextSource, CompareHead: snapshot.CompareHead,
+		Branch: snapshot.Branch, Base: snapshot.Base, Head: snapshot.Head,
+		Bases: snapshot.Bases, Tips: snapshot.Tips, MergeParents: snapshot.MergeParents,
+		Fallback: snapshot.Fallback, DirtyDigest: snapshot.DirtyDigest,
+		Dirty: snapshot.Dirty, RevisionMismatch: snapshot.RevisionMismatch,
+		Registered: len(s.Inventory.Verifications), Eligible: []string{}, Selected: []string{},
 	}
 	eligible := map[check.Key]bool{}
-	var selected []check.Key
 	for _, e := range s.Inventory.Verifications {
-		if e.Member(o.Gate) {
+		if plans[e.Key()] != nil {
 			eligible[e.Key()] = true
 			selection.Eligible = append(selection.Eligible, e.Key().String())
-			selected = append(selected, e.Key())
 		}
 	}
 	if snapshot.RevisionMismatch {
-		fmt.Fprintf(o.Stderr, "ytif: results reflect the working tree at %s, not necessarily pushed tips %s\n", snapshot.Head, strings.Join(snapshot.Tips, ", "))
-	}
-	if len(s.Admission) == 0 && mode == "affected" {
-		g, reason, invs, nxErr := affected.NxFiles(ctx, s.Repo, snapshot.Changed)
-		s.Listing = append(s.Listing, invs...)
-		if nxErr != nil {
-			reason = nxErr.Error()
-		}
-		if g == nil {
-			selection.EffectiveMode, selection.Fallback = "full", reason
-			fmt.Fprintf(o.Stderr, "ytif: affected unavailable; running gate members: %s\n", reason)
+		if o.Gate == check.GatePush {
+			fmt.Fprintf(o.Stderr, "ytif: results reflect the working tree at %s, not necessarily pushed tips %s\n", snapshot.Head, strings.Join(snapshot.Tips, ", "))
 		} else {
-			kept := make([]check.Key, 0, len(selected))
-			for _, k := range selected {
-				if k.Runner == inventory.CommandRunner || !g.Unaffected(k.Unit) {
-					kept = append(kept, k)
-				}
-			}
-			selected = kept
+			fmt.Fprintf(o.Stderr, "ytif: execution checkout %s does not contain comparison head %s; results describe the checkout\n", snapshot.Head, snapshot.CompareHead)
 		}
+	} else if o.Gate == check.GatePush && snapshot.Dirty && len(snapshot.Tips) > 0 {
+		fmt.Fprintf(o.Stderr, "ytif: results reflect the working tree at %s including uncommitted changes, not just pushed tips %s\n", snapshot.Head, strings.Join(snapshot.Tips, ", "))
 	}
-	in.Mode, in.Base, in.Head = selection.EffectiveMode, snapshot.Base, snapshot.Head
-	ctx = proc.WithEnvironment(ctx, in.Environment())
+	var selected []check.Key
 	if len(s.Admission) == 0 {
+		resolvePlans(ctx, s, &in, snapshot)
+		selected = selectedPlans(s, plans)
 		for _, k := range selected {
 			s.Active[k.Runner] = true
 		}
-		if o.Gate == check.GateCI && selection.EffectiveMode == "full" {
+		if o.Gate == check.GateCI && fullCensus(plans, policy.Scope) {
 			for r := range s.Owner {
 				s.Active[r] = true
 			}
 		}
 		s.explore(ctx, in)
-		selected = closeCoRuns(selected, eligible, coRuns(s))
+		co := coRuns(s)
+		selected = closeCoRuns(selected, eligible, co)
+		restorePlans(selected, plans, co)
 	} else {
 		s.reconcile()
 	}
@@ -155,17 +147,20 @@ func Run(ctx context.Context, root string, o Options) int {
 		if wanted[e.Key()] {
 			continue
 		}
-		reason := "unaffected"
-		if !eligible[e.Key()] {
-			reason = "not-in-gate"
-			if o.Gate == check.GatePush && e.SkipPush {
-				reason = "skip-push"
-			}
+		reason := "not-in-gate"
+		if p := plans[e.Key()]; p != nil {
+			reason = p.Reason
+		} else if o.Gate == check.GatePush && e.SkipPush {
+			reason = "skip-push"
 		}
 		selection.Omissions = append(selection.Omissions, record.Omission{Key: e.Key().String(), Reason: reason})
 	}
-	fmt.Fprintf(o.Stdout, "ytif %s · %s · %d selected / %d eligible · %s %d files · jobs %d\n", o.Gate, selection.EffectiveMode, len(selected), len(eligible), in.Scope, len(in.Files), jobs)
-
+	label := o.Gate
+	if policy.Profile != "" {
+		label += " / " + policy.Profile
+	}
+	fmt.Fprintf(o.Stdout, "ytif %s · %d selected / %d eligible · %s %d files · jobs %d\n", label, len(selected), len(eligible), in.Scope, len(in.Files), jobs)
+	printPlans(o, s, in)
 	cancelledAt := make(chan time.Time, 1)
 	stop := context.AfterFunc(ctx, func() { cancelledAt <- time.Now() })
 	defer stop()
@@ -183,6 +178,13 @@ func Run(ctx context.Context, root string, o Options) int {
 		}
 		run = collect(ctx, s, runnable, in)
 	}
+	for _, rep := range run.reports {
+		for _, r := range rep.Results {
+			if p := plans[r.Key]; p != nil {
+				p.Reported = r.ScopeReport
+			}
+		}
+	}
 	findings := s.Findings()
 	exit := present(o, run, findings)
 	if len(s.Admission) > 0 {
@@ -197,6 +199,11 @@ func Run(ctx context.Context, root string, o Options) int {
 	selection.Completed = ctx.Err() == nil && len(s.Admission) == 0
 	if !o.Record {
 		return exit
+	}
+	for _, e := range s.Inventory.Verifications {
+		if p := plans[e.Key()]; p != nil {
+			selection.Plans = append(selection.Plans, *p)
+		}
 	}
 	run.reports = append([]check.Report{{Invocations: s.Listing}}, run.reports...)
 	lines := recordLines(o.Gate, in.Scope, run, findings, cutoff)

@@ -449,11 +449,7 @@ func plan(root string, hosts []string, local bool) ([]file, []error) {
 		}
 		files = append(files, f)
 	}
-	if _, err := inventory.LoadInventory(root); err != nil {
-		errs = append(errs, err)
-	} else {
-		add(skeleton(root, inventory.InventoryFile, ledgerText()))
-	}
+	add(ledger(root))
 	add(lefthook(root, wired))
 	var actions []string
 	if !wired.CI {
@@ -520,13 +516,16 @@ func read(root, rel string) ([]byte, bool, error) {
 	return data, err == nil, err
 }
 
-// skeleton keeps an existing file and creates a missing one.
-// ledgerText is a new ledger. It lists the board windows as a comment, read
-// from the defaults the board applies, so a project can find what it may set.
+// ledgerText is a new ledger with init gate defaults and board windows as a comment.
 func ledgerText() string {
 	d := inventory.BoardConfig{}.Settings()
 	a := d.Average
 	return fmt.Sprintf(`version: 3
+gate:
+  check: {scope: file}
+  commit: {scope: file}
+  push: {scope: full}
+  ci: {scope: full}
 # board:  # statistics windows; an omitted value keeps the default shown
 #   average: {check: %d, commit: %d, push: %d, ci: %d}  # timed results per mean
 #   half_life_percent: %d  # a result's weight halves every this percent of its average window
@@ -559,6 +558,146 @@ func skeleton(root, rel, text string) (file, error) {
 		return file{path: rel, want: have, status: "unchanged"}, nil
 	}
 	return file{path: rel, want: []byte(text), status: "created"}, nil
+}
+
+// ledger creates a missing ledger and fills a missing gate.
+// It proves the candidate loads before writing.
+func ledger(root string) (file, error) {
+	rel := inventory.InventoryFile
+	oldPath := filepath.Join(root, inventory.LegacyInventoryFile)
+	newPath := filepath.Join(root, rel)
+	if _, err := os.Stat(oldPath); err == nil {
+		if _, nerr := os.Stat(newPath); nerr == nil {
+			return file{}, fmt.Errorf("%s and %s both exist; keep one ledger and remove the other", inventory.LegacyInventoryFile, rel)
+		}
+		return file{}, fmt.Errorf("%s is the previous ledger format; run ytif migrate to convert it to %s", inventory.LegacyInventoryFile, rel)
+	}
+	have, ok, err := read(root, rel)
+	if err != nil {
+		return file{}, err
+	}
+	if !ok {
+		data := []byte(ledgerText())
+		if _, err := inventory.ValidateCandidate(root, data); err != nil {
+			return file{}, err
+		}
+		return file{path: rel, want: data, status: "created"}, nil
+	}
+	st, err := os.Stat(newPath)
+	if err != nil {
+		return file{}, err
+	}
+	if !st.Mode().IsRegular() {
+		return file{}, fmt.Errorf("%s: not a regular file", rel)
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(have, &doc); err != nil {
+		return file{}, fmt.Errorf("%s: %w", rel, err)
+	}
+	if doc.Kind == 0 || len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
+		return file{}, fmt.Errorf("%s: want a mapping", rel)
+	}
+	top := doc.Content[0]
+	dirty, err := fillGate(top)
+	if err != nil {
+		return file{}, fmt.Errorf("%s: %w", rel, err)
+	}
+	out, err := encodeYAML(&doc)
+	if err != nil {
+		return file{}, fmt.Errorf("%s: %w", rel, err)
+	}
+	if _, err := inventory.ValidateCandidate(root, out); err != nil {
+		return file{}, err
+	}
+	if !dirty {
+		return file{path: rel, want: have, status: "unchanged"}, nil
+	}
+	if bytes.Equal(have, out) {
+		return file{path: rel, want: have, status: "unchanged"}, nil
+	}
+	return compare(root, rel, out)
+}
+
+// fillGate adds a missing gate and missing scopes. It never overwrites a user value.
+func fillGate(top *yaml.Node) (bool, error) {
+	if err := editable(top, "the top level"); err != nil {
+		return false, err
+	}
+	gate := lookup(top, "gate")
+	if gate == nil {
+		top.Content = append(top.Content, str("gate"), defaultGateNode())
+		return true, nil
+	}
+	if gate.Kind == yaml.ScalarNode && (gate.Tag == "!!null" || strings.TrimSpace(gate.Value) == "") {
+		*gate = *defaultGateNode()
+		return true, nil
+	}
+	if gate.Kind != yaml.MappingNode {
+		return false, nil
+	}
+	if err := editable(gate, "gate"); err != nil {
+		return false, err
+	}
+	dirty := false
+	for _, name := range []string{"check", "commit", "push", "ci"} {
+		sub := lookup(gate, name)
+		if sub == nil {
+			gate.Content = append(gate.Content, str(name), defaultGateEntry(name))
+			dirty = true
+			continue
+		}
+		if sub.Kind == yaml.ScalarNode && (sub.Tag == "!!null" || strings.TrimSpace(sub.Value) == "") {
+			*sub = *defaultGateEntry(name)
+			dirty = true
+			continue
+		}
+		if sub.Kind != yaml.MappingNode {
+			continue
+		}
+		if err := editable(sub, "gate."+name); err != nil {
+			return false, err
+		}
+		switch name {
+		case "check", "commit":
+			if lookup(sub, "scope") == nil {
+				sub.Content = append(sub.Content, str("scope"), str("file"))
+				dirty = true
+			}
+		case "push":
+			hasScope, hasProfile := lookup(sub, "scope") != nil, lookup(sub, "ci-profile") != nil
+			if !hasScope && !hasProfile {
+				sub.Content = append(sub.Content, str("scope"), str("full"))
+				dirty = true
+			}
+		case "ci":
+			if lookup(sub, "scope") == nil {
+				sub.Content = append(sub.Content, str("scope"), str("full"))
+				dirty = true
+			}
+		}
+	}
+	return dirty, nil
+}
+
+// defaultGateNode is the init gate mapping.
+func defaultGateNode() *yaml.Node {
+	return &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
+		str("check"), defaultGateEntry("check"),
+		str("commit"), defaultGateEntry("commit"),
+		str("push"), defaultGateEntry("push"),
+		str("ci"), defaultGateEntry("ci"),
+	}}
+}
+
+// defaultGateEntry is one init gate entry.
+func defaultGateEntry(name string) *yaml.Node {
+	scope := "full"
+	if name == "check" || name == "commit" {
+		scope = "file"
+	}
+	return &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
+		str("scope"), str(scope),
+	}}
 }
 
 // lefthook adds ytif commit to pre-commit and ytif push to pre-push where
@@ -736,6 +875,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -1293,6 +1434,7 @@ func yamlMapping(data []byte) (*yaml.Node, *yaml.Node, error) {
 }
 
 func encodeYAML(doc *yaml.Node) ([]byte, error) {
+	canonicalMergeKeys(doc)
 	var b bytes.Buffer
 	enc := yaml.NewEncoder(&b)
 	enc.SetIndent(2)
@@ -1303,6 +1445,26 @@ func encodeYAML(doc *yaml.Node) ([]byte, error) {
 		return nil, err
 	}
 	return b.Bytes(), nil
+}
+
+// canonicalMergeKeys drops the resolver's explicit !!merge tag from << keys
+// a mapping init did not refuse (nested where init never edits), so a
+// rewritten file keeps the plain << form. The alias value is untouched, so
+// the merge still applies on the next read.
+func canonicalMergeKeys(n *yaml.Node) {
+	if n == nil {
+		return
+	}
+	if n.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			if k := n.Content[i]; k.Value == "<<" && k.Tag == "!!merge" {
+				k.Tag = ""
+			}
+		}
+	}
+	for _, c := range n.Content {
+		canonicalMergeKeys(c)
+	}
 }
 
 func lookup(m *yaml.Node, key string) *yaml.Node {

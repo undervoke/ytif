@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/undervoke/ytif/internal/check"
@@ -193,11 +194,26 @@ func (s *Source) execute(ctx context.Context, repo check.Repo, sel []picked, in 
 			running++
 			go func() {
 				log := &lineWriter{mu: &logMu, dst: repo.Log, prefix: "[" + c.name + "] "}
-				cmd := exec.CommandContext(ctx, c.run[0], c.run[1:]...)
-				cmd.Dir = workingDir(repo.Root, c.cwd)
-				cmd.Stdout, cmd.Stderr = log, log
-				cmd.Env = append(cmd.Environ(), in.Environment()...)
-				elapsed, err := proc.Run(ctx, cmd)
+				argv := c.run
+				plan := in.Plans[c.key]
+				if plan != nil && len(plan.Argv) > 0 {
+					argv = plan.Argv
+				}
+				run := func(args []string) (time.Duration, error) {
+					cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+					cmd.Dir = workingDir(repo.Root, c.cwd)
+					cmd.Stdout, cmd.Stderr = log, log
+					cmd.Env = in.ProcessEnvironment(cmd.Environ(), []check.Key{c.key})
+					return proc.Run(ctx, cmd)
+				}
+				elapsed, err := run(argv)
+				if errors.Is(err, syscall.E2BIG) && plan != nil && len(plan.Argv) > 0 {
+					plan.Resolved, plan.Expansion, plan.Reason = check.ScopeFull, "argument-limit", "argument-limit"
+					plan.Argv, plan.Changed, plan.Offered, plan.Targets = nil, nil, "full-domain", 0
+					fmt.Fprintln(log, "ytif: argument limit; running the original full invocation")
+					d, fallbackErr := run(c.run)
+					elapsed, err = elapsed+d, fallbackErr
+				}
 				log.flush()
 				finished <- done{index: i, out: outcome{
 					elapsed: elapsed, ended: time.Now().UTC(),

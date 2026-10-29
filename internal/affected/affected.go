@@ -32,13 +32,19 @@ type Graph struct {
 // Unaffected reports whether unit belongs to a project the change does not
 // affect. A unit outside every project is affected.
 func (g *Graph) Unaffected(unit string) bool {
+	owner, found := g.Project(unit)
+	return found && !g.affected[owner]
+}
+
+// Project returns the deepest project owning unit, when the graph maps it.
+func (g *Graph) Project(unit string) (string, bool) {
 	owner, best := "", -1
 	for name, root := range g.roots {
 		if (root == "" || unit == root || strings.HasPrefix(unit, root+"/")) && len(root) > best {
 			owner, best = name, len(root)
 		}
 	}
-	return best >= 0 && !g.affected[owner]
+	return owner, best >= 0
 }
 
 // NxFiles reports which projects the changed files affect. It loads the Nx

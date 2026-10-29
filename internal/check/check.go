@@ -72,35 +72,40 @@ const (
 // Scope names the file set a gate binds to its checks.
 const (
 	ScopeStaged = "staged"
-	ScopePushed = "pushed"
 	ScopeTree   = "tree"
 )
 
 // Input binds a gate to the files its checks examine. Files never falls back
 // to the whole tree: an empty list means nothing is in scope.
 type Input struct {
-	Gate  string
-	Scope string
-	Files []string // slash-separated, relative to the repository root
-	Mode  string
-	Base  string
-	Head  string
+	Gate       string
+	Scope      string
+	Files      []string // slash-separated, relative to the repository root
+	Profile    string
+	Comparison *Comparison
+	TargetTip  string
+	Plans      map[Key]*Plan
 }
 
 // Environment supplies the selection context without claiming that child
 // commands use it to select their own work.
 func (in Input) Environment() []string {
-	return []string{"YTIF_MODE=" + in.Mode, "YTIF_BASE=" + in.Base, "YTIF_HEAD=" + in.Head}
+	kind, base, head := "", "", ""
+	if in.Comparison != nil {
+		kind, base, head = in.Comparison.Kind, in.Comparison.Base, in.Comparison.Head
+	}
+	return []string{"YTIF_GATE=" + in.Gate, "YTIF_PROFILE=" + in.Profile, "YTIF_COMPARE_KIND=" + kind, "YTIF_COMPARE_BASE=" + base, "YTIF_COMPARE_HEAD=" + head}
 }
 
 // Result is one check outcome.
 type Result struct {
-	Key     Key
-	Outcome Outcome
-	Elapsed time.Duration
-	Timed   bool // false when the source cannot attribute elapsed time to this check
-	Output  string
-	Ended   time.Time // when the check finished, if the source knows
+	Key         Key
+	Outcome     Outcome
+	Elapsed     time.Duration
+	Timed       bool // false when the source cannot attribute elapsed time to this check
+	Output      string
+	Ended       time.Time // when the check finished, if the source knows
+	ScopeReport *ScopeReport
 }
 
 // Invocation is one build or process a source started, with its wall time.

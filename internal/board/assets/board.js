@@ -50,6 +50,8 @@ const T = {
     tags: "Tags", openDiagram: "Open in diagram →",
     unitKey: (runner, n) => `${runner} · ${n} verifications`,
     run: "Run", cwd: "Directory", exclusive: "Exclusive", origin: "Defined in",
+    planTitle: "Scope plan", planRun: "run", planSkip: "skip", planUnknown: "execution scope unreported",
+    planOffered: n => `offered candidates ${n}`, planReported: s => `verifier reported: ${s}`,
     location: "Location",
     railLabel: "Verification list", railOpen: "Open the list", railClose: "Collapse the list",
     railFilter: "Filter", railGroup: "Grouping", railByFile: "By file", railByRunner: "By command",
@@ -113,6 +115,8 @@ const T = {
     tags: "태그", openDiagram: "다이어그램에서 보기 →",
     unitKey: (runner, n) => `${runner} · 검증 ${n}`,
     run: "실행", cwd: "디렉터리", exclusive: "exclusive", origin: "정의 위치",
+    planTitle: "범위 계획", planRun: "실행", planSkip: "건너뜀", planUnknown: "실행 범위 미보고",
+    planOffered: n => `제공 후보 ${n}개`, planReported: s => `검증기 보고: ${s}`,
     location: "위치",
     railLabel: "검증 목록", railOpen: "목록 펼치기", railClose: "목록 접기",
     railFilter: "필터", railGroup: "묶음", railByFile: "파일 별", railByRunner: "실행 명령 별",
@@ -682,8 +686,53 @@ function detailHTML(c) {
   return `<div class="vdetail">
     <div class="texts">${rows.map(([k, v]) => `<span${k === "diagramImpact" ? ` class="impact"` : ""}><b>${esc(t(k))}</b><span>${esc(v || "–")}</span></span>`).join("")}</div>
     <div class="side"><b>${esc(t("tags"))}</b>${tagRows(c) || `<span class="note">–</span>`}<a href="${href(c.key)}">${esc(t("openDiagram"))}</a></div>
+    ${planHTML(c.plans)}
     <div class="vloc"><b>${esc(t("location"))}</b><code>${breakable(c.key, /[:/.]/g)}</code></div>
   </div>`;
+}
+
+const shortOID = s => { s = String(s || ""); return s.length > 7 ? s.slice(0, 7) : s };
+// planHTML shows the latest plan per gate and source: requested to resolved
+// scope, run or skip, the offered candidate inputs (a count only for
+// native/nx/legacy inputs, never analyzed coverage), the reason or expansion
+// when one widened or skipped the run, the scope the verifier reported, or
+// unreported for runs (skips carry no execution scope; native stays
+// unreported until it reports), the CI profile when present, and the concise
+// comparison, execution, and target revisions.
+// Old records without plans show nothing.
+function planHTML(plans) {
+  if (!plans || !plans.length) return "";
+  const countableOffered = o => /^(native-targets|nx-units|changed-files|legacy-files)/.test(String(o || ""));
+  const rows = plans.map(p => {
+    const head = `${esc(p.gate)} · ${esc(p.source)}${p.profile ? ` · ${esc(p.profile)}` : ""}`;
+    const scope = `${esc(p.requested || "?")}→${esc(p.resolved || "?")}`;
+    const state = esc(p.run ? t("planRun") : t("planSkip"));
+    // full-domain and comparison-only carry no meaningful target count, so
+    // only native/nx/legacy inputs name their offered candidate count.
+    const offered = countableOffered(p.offered)
+      ? `${esc(p.offered)} · ${esc(t("planOffered", fmt(p.targets ?? 0)))}`
+      : esc(p.offered || t("planOffered", fmt(p.targets ?? 0)));
+    const reported = p.reported ? `${esc(t("planReported", p.reported))}${p.reported_targets != null ? ` · ${fmt(p.reported_targets)}` : ""}` : p.run ? esc(t("planUnknown")) : "";
+    const notes = [p.reason, p.expansion].filter(Boolean).map(esc).join(" · ");
+    const revs = [];
+    if (p.comparison && (p.comparison.base || p.comparison.head)) {
+      const end = p.comparison.kind === "worktree" || p.comparison.kind === "index" ? p.comparison.kind : shortOID(p.comparison.head);
+      revs.push(`compare ${esc(shortOID(p.comparison.base))}→${esc(end)}`);
+    }
+    else if (p.compare_head) revs.push(`compare-head ${esc(shortOID(p.compare_head))}`);
+    // base/head are the execution revisions (snapshot); comparison head can differ (e.g. PR event).
+    if (p.head) revs.push(`exec ${esc(shortOID(p.head))}`);
+    else if (p.base && !p.comparison) revs.push(`compare base ${esc(shortOID(p.base))}`);
+    if (p.target && (p.target.sha || p.target.remote || p.target.branch)) {
+      const name = [p.target.remote, p.target.branch].filter(Boolean).join("/");
+      const sha = p.target.sha ? `@${esc(shortOID(p.target.sha))}` : "";
+      const src = p.target.source ? ` · ${esc(p.target.source)}` : "";
+      revs.push(`target ${esc(name)}${sha}${src}`);
+    }
+    if (p.context_source) revs.push(esc(p.context_source));
+    return `<div class="planrow"><span class="planhead">${head}</span><span>${scope} · ${state}</span><span>${offered}</span>${reported ? `<span>${reported}</span>` : ""}${notes ? `<span class="note">${notes}</span>` : ""}${revs.length ? `<span class="note">${revs.join(" · ")}</span>` : ""}</div>`;
+  }).join("");
+  return `<div class="vplans"><b>${esc(t("planTitle"))}</b>${rows}</div>`;
 }
 
 function drawRows(st, rows) {
@@ -1029,6 +1078,7 @@ function diagramPage(r) {
     <button type="button" class="detection-toggle" id="detection-toggle" aria-expanded="${mm.full}" aria-controls="detection" hidden>${esc(t(mm.full ? "diagramCollapse" : "diagramShowAll"))}</button>
     ${c.is_command ? "" : `<div class="impact"><span class="impact-label">${fieldHead("diagramImpact", "impact")}</span><p>${esc(c.impact || "–")}</p></div>`}
     ${chips(c)}${gateBadges(c)}
+    ${planHTML(c.plans)}
     ${states.length ? `<div class="statepills">${states.map(([kind, label, tip]) => `<span class="statepill ${kind}" title="${esc(t(tip))}">${esc(t(label))}</span>`).join("")}</div>` : ""}` +
     // the headline is the name itself when there is nothing else to lead with
     (text === c.name ? "" : `<span class="mono note">${esc(c.name)}</span>`) +

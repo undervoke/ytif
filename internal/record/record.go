@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/undervoke/ytif/internal/check"
+	"github.com/undervoke/ytif/internal/gitx"
 	"github.com/undervoke/ytif/internal/storage"
 )
 
@@ -54,24 +56,30 @@ const (
 	ArtifactFile = "ytif-records.jsonl"
 )
 
-// Selection describes scheduling, not a claim about work spawned by a verifier.
+// Selection carries final plans once per attempt, after execution-time widening
+// and verifier reports. It describes scheduling, not unreported verifier work.
 type Selection struct {
-	RequestedMode    string     `json:"requested_mode"`
-	EffectiveMode    string     `json:"effective_mode"`
-	Branch           string     `json:"branch,omitempty"` // empty when HEAD was detached
-	Base             string     `json:"base,omitempty"`
-	Head             string     `json:"head,omitempty"`
-	Fallback         string     `json:"fallback,omitempty"`
-	DirtyDigest      string     `json:"dirty_digest,omitempty"`
-	Bases            []string   `json:"bases,omitempty"`
-	Tips             []string   `json:"tips,omitempty"`
-	MergeParents     []string   `json:"merge_parents,omitempty"`
-	RevisionMismatch bool       `json:"revision_mismatch,omitempty"`
-	Registered       int        `json:"registered"`
-	Eligible         []string   `json:"eligible"`
-	Selected         []string   `json:"selected"`
-	Omissions        []Omission `json:"omissions,omitempty"`
-	Completed        bool       `json:"completed"`
+	Profile          string              `json:"profile,omitempty"`
+	Comparison       *check.Comparison   `json:"comparison,omitempty"`
+	Target           *gitx.TargetContext `json:"target,omitempty"`
+	ContextSource    string              `json:"context_source,omitempty"`
+	CompareHead      string              `json:"compare_head,omitempty"`
+	Plans            []check.Plan        `json:"plans,omitempty"`
+	Branch           string              `json:"branch,omitempty"` // empty when HEAD was detached
+	Base             string              `json:"base,omitempty"`
+	Head             string              `json:"head,omitempty"`
+	Fallback         string              `json:"fallback,omitempty"`
+	DirtyDigest      string              `json:"dirty_digest,omitempty"`
+	Dirty            bool                `json:"dirty,omitempty"`
+	Bases            []string            `json:"bases,omitempty"`
+	Tips             []string            `json:"tips,omitempty"`
+	MergeParents     []string            `json:"merge_parents,omitempty"`
+	RevisionMismatch bool                `json:"revision_mismatch,omitempty"`
+	Registered       int                 `json:"registered"`
+	Eligible         []string            `json:"eligible"`
+	Selected         []string            `json:"selected"`
+	Omissions        []Omission          `json:"omissions,omitempty"`
+	Completed        bool                `json:"completed"`
 }
 
 type Omission struct {

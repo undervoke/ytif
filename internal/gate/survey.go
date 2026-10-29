@@ -51,7 +51,7 @@ func NewSurvey(ctx context.Context, root string, sources []check.Source, config 
 		for r := range s.Owner {
 			s.Active[r] = true
 		}
-		in := check.Input{Mode: "full"}
+		in := check.Input{Scope: check.ScopeTree, Files: s.Repo.Tracked}
 		s.explore(proc.WithEnvironment(ctx, in.Environment()), in)
 	} else {
 		s.reconcile()

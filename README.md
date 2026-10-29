@@ -39,7 +39,7 @@ Init needs a root `go.mod`. It pins ytif as a tool, creates the ledger and the
 exemptions, wires `ytif commit` and `ytif push` into lefthook and `ytif ci`
 into a GitHub workflow, and registers the agent guard for the selected hosts. <!-- dinyd: internal/initcmd/initcmd.go#Run s1:268a94cada7b997c -->
 In ytif's own repository, init registers the checkout's command for gates. <!-- dinyd: internal/initcmd/initcmd.go#pinStep s1:cc8001f009c097c4 -->
-Agent guards in this repository use the installed ytif release on PATH, keeping their executable independent of source edits. <!-- dinyd: internal/initcmd/initcmd.go#plan s1:eca84afb01c910e7 -->
+Agent guards in this repository use the installed ytif release on PATH, keeping their executable independent of source edits. <!-- dinyd: internal/initcmd/initcmd.go#plan s1:984eda99db0d1dbc -->
 Run `lefthook install`, then follow the approval steps init prints for each
 host.
 
@@ -71,8 +71,11 @@ func VerifyXxx(ctx context.Context, [files []string], [provided...], w io.Writer
 ```
 
 ```js
-export async function verifyXxx({ files, signal, mode, base, head }, out) // out.write(text)
+export async function verifyXxx({ files, signal, gate, profile, selection, report }, out) // out.write(text)
 ```
+
+`selection` carries the plan's requested and resolved scope with its decision, comparison, and changed paths; `report({scope, targets})` optionally records the scope actually run, and an unreported scope stays unknown.
+Comparisons identify their `kind`: `commits` has a base and head, while `worktree` and `index` have a baseline and offer the changed paths separately.
 
 A Go verify function returning `(T, error)` provides `T` to verify functions of
 the same package that take it. Test names must be static. Anything discovery
@@ -91,6 +94,16 @@ fragments under its own directory:
 
 ```yaml
 version: 3
+gate:
+  check: {scope: file}
+  commit: {scope: file}
+  push: {scope: full}          # or {ci-profile: NAME} to preview that profile's CI selection
+  ci:
+    scope: full
+    profiles:
+      integration:
+        scope: affected
+        target: {remote: origin, branch: staging}
 vocabulary:                    # the project's own tag groups
   where:
     release: Release
@@ -139,22 +152,37 @@ this one depends on or keeps working.
 
 ## Gates
 
-| Command | Runs | Files given to verifications |
+| Command | Runs | Scope written by init |
 |---|---|---|
-| `ytif check` | `check: true` | tracked paths |
-| `ytif commit` | `commit: true` | staged paths |
-| `ytif push` | every verification unless `skip-push: true` | tracked paths |
-| `ytif ci` | every verification | tracked paths |
+| `ytif check` | `check: true` | `file` |
+| `ytif commit` | `commit: true` | `file` |
+| `ytif push` | every verification unless `skip-push: true` | `full`, or one CI profile when mapped |
+| `ytif ci [--profile NAME]` | every verification | `full` |
 
-Every gate runs on the current working tree; the last column only names the
-paths verify functions receive.
+Every gate runs on the current working tree. The ledger's `gate:` section is required and sets how much of each member runs: `file` requests changed-file targeting, `affected` skips it when Nx places it in an unaffected project, and `full` runs its registered invocation unchanged. A ledger without `gate:` fails to load; `ytif init` writes the values above and fills missing gate settings while preserving existing ledger settings. <!-- dinyd: internal/initcmd/initcmd.go#fillGate s1:b3ea274eab1946f6 --> <!-- dinyd: internal/initcmd/initcmd.go#ledgerText s1:abb2b7d61802063f -->
 
-Without `--base`, a gate runs every member. `--base REF` drops the members in
-Nx projects unaffected since the merge base with `REF`; commands, units
-outside every Nx project, and verifications that must run with a selected one
-still run. Without a usable Nx result the gate runs every member and records
-why. An affected run discovers only the runners it selects, so `ytif list` and
-a full `ytif ci` are what find every new test.
+An entry overrides the policy per gate or per CI profile:
+
+```yaml
+verifications:
+  - runner: command
+    name: eslint
+    run: [pnpm, exec, eslint, ., --max-warnings, "0"]
+    commit: true
+    scope: {ci: full}
+```
+
+The most specific scope wins: for `ci` and a mapped push, entry `ci/<profile>`, then entry `ci`, then the profile, then gate `ci`; for check, commit, and an unmapped push, the entry scope, then the gate scope. Membership still decides which verifications a gate runs; scope decides only how much of each one runs. <!-- dinyd: internal/inventory/gate.go#GateContext.Resolve s1:0476e67848eb9527 -->
+
+`--base`, `--head`, and `--target-branch` only choose the comparison; scope comes from the ledger. Check compares HEAD to the working tree including nonignored untracked files, commit compares HEAD to staged paths, push compares each pushed tip to its merge base with the mapped profile's target, and pull-request CI compares the merge base of the event's base and head to the PR head while recording the execution HEAD separately. A push needing comparison fetches its target once into a ytif-owned ref; when pushed tips differ from the working tree, narrowed verifications run full because the result describes the working tree. Without a usable comparison — no target, no history, or a failed fetch — narrowed plans run full and record why, as does any narrowing that cannot be established. CI outside a PR uses explicit comparison inputs or the profile's locally available target ref; a post-merge run whose target equals HEAD compares nothing, so keep that profile full or pass an explicit comparison that names the intended range.
+
+Native file targeting supports ESLint 10, direct or via `pnpm exec eslint`, with literal file/directory operands and simple JavaScript configs. Local dependencies must be static relative imports or literal `require` of regular, exact-case `.js`, `.mjs`, or `.cjs` files inside the repository. Node builtins and packages whose real paths remain under `node_modules` are treated as installed dependencies, including their exported subpaths. Workspace or unresolved package imports, directory imports, TS configs, URL references, symlinked or differently cased config/helper/domain paths, and other unmodeled forms run the original full invocation with a reason. <!-- dinyd: internal/targeting/targeting.go#plan s1:71b5d6aeaf8cd540 -->
+Config, ignore, manifest, and lockfile changes anywhere in the repository widen to full, as do changes to tracked relative helpers; this deliberately trades some extra runs for avoiding Node module-resolution rules. Otherwise, changed existing files inside the operands are passed after `--` with `--no-warn-ignored`, and a valid empty set skips. Explicit file operands need an existing `--no-warn-ignored` to preserve their original warning behavior. File scope provides selected-file feedback, not proof of rule locality: arbitrary cross-file dependencies and runtime file reads remain outside the static model.
+
+Child processes receive `YTIF_GATE`, `YTIF_PROFILE`, and `YTIF_COMPARE_KIND`/`YTIF_COMPARE_BASE`/`YTIF_COMPARE_HEAD`. Commands and Node dispatchers also receive `YTIF_SCOPE`: a narrowed commit-range comparison projects the target tip as `NX_BASE`; full runs and local worktree/index comparisons clear it, and both remove `NX_HEAD`. Go verifier processes apply that projection only for a homogeneous batch; mixed batches keep the host Nx environment and omit the scalar scope. `BASE_SHA` remains host-owned. <!-- dinyd: internal/check/plan.go#Input.ProcessEnvironment s1:d044300cad3ecdc2 -->
+Node checks run in key order, one dispatcher per maximal contiguous process context; module state is shared within each dispatcher. A wrapper chooses its own targets, so projected environment values alone establish no actual execution scope.
+
+A narrowed run prepares and discovers only the runners its selection needs, so `ytif list` and an effective-full `ytif ci` are what find every new test.
 
 `ytif check` is the gate agents may run. Before anything starts it rejects
 test runners and `go-verify` marked `check: true`, and `command` and `prepare`
@@ -176,6 +204,8 @@ pre-push:
 # GitHub Actions
 steps:
   - uses: actions/checkout@v7
+    with:
+      fetch-depth: 0
   - uses: actions/setup-go@v7
     with:
       go-version-file: go.mod
@@ -186,6 +216,8 @@ steps:
       name: ytif-records
       path: ytif-records.jsonl
 ```
+
+`ytif init` writes that workflow only when none runs `ytif ci`; an existing workflow is left unchanged. Narrowing compares against history, so keep `fetch-depth: 0`.
 
 Every lefthook and workflow command must call `ytif` or be listed in
 `ytif-gate-exemptions.yaml` with its reason. A `run` entry matches a step's
@@ -238,7 +270,7 @@ credentials, a network, or any artifact, the page renders the cached records
 and names on the source line why the sync stopped.
 
 A gate's time is the sum of its current members' means. <!-- dinyd: internal/board/board.go#summarize s1:824cf197241d735e -->
-Each mean weights the last N timed results of that verification at that gate toward the newest: a result's weight halves every `half_life_percent` percent of N, so one value gives every gate the same shape. <!-- dinyd: internal/board/board.go#aggregate s1:3325f4ee969cfe77 --> <!-- dinyd: internal/board/board.go#meansOf s1:34b753e0c61efa15 --> <!-- dinyd: internal/board/board.go#build s1:329700293a7609f8 -->
+Each mean weights the last N timed results of that verification at that gate toward the newest: a result's weight halves every `half_life_percent` percent of N, so one value gives every gate the same shape. <!-- dinyd: internal/board/board.go#aggregate s1:3325f4ee969cfe77 --> <!-- dinyd: internal/board/board.go#meansOf s1:34b753e0c61efa15 --> <!-- dinyd: internal/board/board.go#build s1:001113d7769fc7c0 -->
 A fail counts as one hit; later fails of that verification at that gate count again only after a pass. <!-- dinyd: internal/record/hits.go#Hits s1:d5b7e4a02af8b181 -->
 Hits are counted over the last `days` days, with an optional latest-attempt limit per gate. <!-- dinyd: internal/board/board.go#window s1:374dbfd9604443da -->
 Only the root ledger sets the windows:
@@ -258,7 +290,7 @@ An omitted value keeps the default: 100 timed results per gate, 10 for ci, a hal
 `hits.last` counts a gate's hits only in its latest N attempts; leave it out to count every attempt inside the days.
 `recent_fail_days` is how far back a fail marks a verification as recently failed. <!-- dinyd: internal/board/board.go#flags s1:0e0a093f81108c3b -->
 `scales` lists the time bars' ticks in milliseconds, each interval taking an equal width: `verification` draws single verifications, `unit` draws unit, file, and process totals, and the verification page's execution-unit rows extend `verification` tenfold until their largest total fits. <!-- dinyd: internal/inventory/inventory.go#Scales s1:8e1feca08d139295 -->
-A ledger `ytif init` creates lists these keys and their defaults as a comment. <!-- dinyd: internal/initcmd/initcmd.go#ledgerText s1:fe30842bb72de8eb -->
+A ledger `ytif init` creates lists these keys and their defaults as a comment. <!-- dinyd: internal/initcmd/initcmd.go#ledgerText s1:abb2b7d61802063f -->
 
 ## Agent guard
 

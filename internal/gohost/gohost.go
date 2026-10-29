@@ -15,6 +15,7 @@ import (
 	"context"
 
 	"github.com/undervoke/ytif/internal/check"
+	"github.com/undervoke/ytif/internal/proc"
 )
 
 const (
@@ -51,7 +52,18 @@ func (s *Source) Run(ctx context.Context, repo check.Repo, keys []check.Key, in 
 		}
 	}
 	var rep check.Report
-	for _, g := range groups(s.pkgs, keys) {
+	pendingGroups := groups(s.pkgs, keys)
+	for i, g := range pendingGroups {
+		if i > 0 && ctx.Err() != nil {
+			var pending []check.Key
+			for _, rest := range pendingGroups[i:] {
+				pending = append(pending, rest.keys()...)
+			}
+			rep.Invocations = append(rep.Invocations, check.Invocation{
+				Runner: Runner, What: "run", Err: proc.ErrInterrupted, Keys: pending, Interrupted: true,
+			})
+			break
+		}
 		r := g.run(ctx, repo, in)
 		rep.Results = append(rep.Results, r.Results...)
 		rep.Invocations = append(rep.Invocations, r.Invocations...)

@@ -3,14 +3,17 @@
 //
 // A check has the shape
 //
-//	export async function verifyXxx({ files, signal }, out)
+//	export async function verifyXxx({ files, signal, gate, profile, selection, report }, out)
 //
 // where files are the gate's files, signal aborts when the gate is
-// interrupted, and out.write(text) writes findings as path:line: message.
+// interrupted, gate and profile name the run, selection carries the plan's
+// requested and resolved scope with its decision, comparison and changed
+// paths, report({scope, targets}) optionally records the scope actually
+// run, and out.write(text) writes findings as path:line: message.
 // A check fails by throwing. Exports are read statically; an export that
-// could carry a check name ytif cannot see fails discovery. Each run starts
-// one generated dispatcher that imports the modules and calls the selected
-// checks in order.
+// could carry a check name ytif cannot see fails discovery. Each homogeneous
+// process group runs one generated dispatcher that imports the modules and
+// calls its checks in order.
 package nodeverify
 
 import (
@@ -26,7 +29,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -196,50 +198,135 @@ func isCheckName(name string) bool {
 	return !unicode.IsLower(r)
 }
 
-// Run executes keys in one dispatcher, in key order.
+// nodeCheck is one check the dispatcher calls, with the plan that chose
+// its execution. Files stay the gate's files; Changed and Comparison are
+// offered only when narrowed: a resolved full check carries null
+// comparison and changed.
+type nodeCheck struct {
+	Module    string
+	Name      string
+	Requested check.TargetScope
+	Resolved  check.TargetScope
+	Run       bool
+	Reason    string
+	Changed   []string
+}
+
+// nodeRequest is what one dispatcher process receives. Gate and Profile
+// always travel; Comparison is present only for narrowed groups, null for
+// resolved full. EnvKeys carries check.RestoreKeys for per-call restore.
+type nodeRequest struct {
+	Files      []string
+	Gate       string
+	Profile    string
+	Comparison *check.Comparison
+	EnvKeys    []string
+	Checks     []nodeCheck
+}
+
+// planView returns the execution view for one key. A missing plan runs as
+// full; callers filter Run=false keys before grouping.
+func planView(in check.Input, k check.Key) (requested, resolved check.TargetScope, run bool, reason string, changed []string) {
+	requested, resolved, run = check.ScopeFull, check.ScopeFull, true
+	if p := in.Plans[k]; p != nil {
+		requested, resolved, run, reason, changed = p.Requested, p.Resolved, p.Run, p.Reason, p.Changed
+	}
+	return requested, resolved, run, reason, changed
+}
+
+// Run executes keys in key order, split into maximal contiguous groups
+// sharing one projected process environment. Each group runs one
+// dispatcher sequentially, so A(full),B(affected),C(full) stays three
+// processes in order. Cancellation stops later groups.
 func (*Source) Run(ctx context.Context, repo check.Repo, keys []check.Key, in check.Input) (check.Report, error) {
 	keys = append([]check.Key(nil), keys...)
 	sort.Slice(keys, func(i, j int) bool { return keys[i].Less(keys[j]) })
 	var rep check.Report
-	invocation := func(elapsed time.Duration, err error) {
+	var runnable []check.Key
+	for _, k := range keys {
+		if p := in.Plans[k]; p != nil && !p.Run {
+			rep.Skipped = append(rep.Skipped, k)
+			continue
+		}
+		runnable = append(runnable, k)
+	}
+	if len(runnable) == 0 {
+		return rep, nil
+	}
+	// The input fixes gate, profile, comparison and target, so one projected
+	// process context is exactly one homogeneous scope: a missing plan runs
+	// as full but groups apart from actual full.
+	var groups [][]check.Key
+	var previousScope check.TargetScope
+	var previousKnown bool
+	for i, k := range runnable {
+		scope, known := in.HomogeneousScope([]check.Key{k})
+		if i > 0 && known == previousKnown && scope == previousScope {
+			groups[len(groups)-1] = append(groups[len(groups)-1], k)
+		} else {
+			groups = append(groups, []check.Key{k})
+		}
+		previousScope, previousKnown = scope, known
+	}
+	for gi, gkeys := range groups {
+		if gi > 0 && ctx.Err() != nil {
+			var pending []check.Key
+			for _, rest := range groups[gi:] {
+				pending = append(pending, rest...)
+			}
+			rep.Invocations = append(rep.Invocations, check.Invocation{
+				Runner: Runner, What: "run", Err: proc.ErrInterrupted, Keys: pending, Interrupted: true,
+			})
+			break
+		}
+		req := nodeRequest{Files: in.Files, Gate: in.Gate, Profile: in.Profile, EnvKeys: check.RestoreKeys}
+		names := make([]string, 0, len(gkeys))
+		allFull := true
+		for _, k := range gkeys {
+			requested, resolved, run, reason, changed := planView(in, k)
+			if resolved != check.ScopeFull {
+				allFull = false
+			} else {
+				changed = nil
+			}
+			names = append(names, k.Unit+":"+k.Name)
+			req.Checks = append(req.Checks, nodeCheck{
+				Module: filepath.Join(repo.Root, filepath.FromSlash(k.Unit)), Name: k.Name,
+				Requested: requested, Resolved: resolved, Run: run, Reason: reason, Changed: changed,
+			})
+		}
+		if !allFull {
+			req.Comparison = in.Comparison
+		}
+		work := filepath.Join(repo.Scratch, "nodeverify", fmt.Sprintf("group-%d", gi))
+		results := filepath.Join(work, "results.jsonl")
+		script := filepath.Join(work, "dispatch.mjs")
+		body, err := json.Marshal(req)
+		if err == nil {
+			err = os.MkdirAll(work, 0o755)
+		}
+		if err == nil {
+			err = os.WriteFile(script, dispatcher, 0o644)
+		}
+		if err != nil {
+			rep.Invocations = append(rep.Invocations, check.Invocation{
+				Runner: Runner, What: "run", Elapsed: 0, Err: err, Keys: append([]check.Key(nil), gkeys...),
+				Interrupted: errors.Is(err, proc.ErrInterrupted),
+			})
+			continue
+		}
+		cmd := exec.CommandContext(ctx, "node", script, results)
+		cmd.Dir = repo.Root
+		cmd.Stdin = bytes.NewReader(body)
+		cmd.Stdout, cmd.Stderr = repo.Log, repo.Log
+		cmd.Env = in.ProcessEnvironment(cmd.Environ(), gkeys)
+		elapsed, runErr := proc.Run(ctx, cmd)
+		out, err := dispatch.Results(results, gkeys, names, runErr)
+		rep.Results = append(rep.Results, out...)
 		rep.Invocations = append(rep.Invocations, check.Invocation{
-			Runner: Runner, What: "run", Elapsed: elapsed, Err: err, Keys: keys,
+			Runner: Runner, What: "run", Elapsed: elapsed, Err: err, Keys: append([]check.Key(nil), gkeys...),
 			Interrupted: errors.Is(err, proc.ErrInterrupted),
 		})
 	}
-	type call struct{ Module, Name string }
-	req := struct {
-		Files  []string
-		Checks []call
-		Mode   string
-		Base   string
-		Head   string
-	}{Files: in.Files, Mode: in.Mode, Base: in.Base, Head: in.Head}
-	names := make([]string, len(keys))
-	for i, k := range keys {
-		names[i] = k.Unit + ":" + k.Name
-		req.Checks = append(req.Checks, call{filepath.Join(repo.Root, filepath.FromSlash(k.Unit)), k.Name})
-	}
-	work := filepath.Join(repo.Scratch, "nodeverify")
-	results := filepath.Join(work, "results.jsonl")
-	body, err := json.Marshal(req)
-	if err == nil {
-		err = os.MkdirAll(work, 0o755)
-	}
-	script := filepath.Join(work, "dispatch.mjs")
-	if err == nil {
-		err = os.WriteFile(script, dispatcher, 0o644)
-	}
-	if err != nil {
-		invocation(0, err)
-		return rep, nil
-	}
-	cmd := exec.CommandContext(ctx, "node", script, results)
-	cmd.Dir = repo.Root
-	cmd.Stdin = bytes.NewReader(body)
-	cmd.Stdout, cmd.Stderr = repo.Log, repo.Log
-	elapsed, runErr := proc.Run(ctx, cmd)
-	rep.Results, err = dispatch.Results(results, keys, names, runErr)
-	invocation(elapsed, err)
 	return rep, nil
 }

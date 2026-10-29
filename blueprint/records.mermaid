@@ -18,21 +18,21 @@ config:
 %% The board reads the local records and, on GitHub, syncs the repository's artifacts into a cache beside them; --records chooses other local files.
 flowchart LR
   subgraph Host["CI · host workflow owns upload and retention"]
-    CIGate["ytif ci<br/><small>Workflow sets the mode and --records path</small>"]
-    CIRec@{ shape: doc, label: "Runner-local JSONL<br/><small>• Results, timings and selection<br/>• Full output stays in the CI console</small>" }
+    CIGate["ytif ci<br/><small>Workflow sets the profile and --records path</small>"]
+    CIRec@{ shape: doc, label: "Runner-local JSONL<br/><small>• Results, timings, and per-key plans<br/>• Profile, comparison, and reported scope<br/>• Full output stays in the CI console</small>" }
     %% dinyd: internal/gate/gate.go#recordLines s1:40e67d8155cf6d7e
     Artifact@{ shape: cloud, label: "ytif-records artifact<br/><small>Uploaded even after a failed gate</small>" }
     %% dinyd: internal/record/record.go#ArtifactName s1:7cb35f171e9231c3
     %% dinyd: internal/record/record.go#ArtifactFile s1:89465f0422dd423c
     CIGate -->|Append at finalization| CIRec
-    %% dinyd: internal/gate/gate.go#Run s1:48aeaded1e0ab95a
+    %% dinyd: internal/gate/gate.go#Run s1:f7690a3f1e794db6
     CIRec -->|Upload step| Artifact
     %% dinyd: .github/workflows/ci.yml#/jobs/ytif/steps/6 s1:e0faf688a33499c5
   end
 
   subgraph Dev["Developer machine"]
     LocalGate["Local recording triggers<br/><small>• Direct: check<br/>• lefthook: commit / push --hook</small>"]
-    %% dinyd: internal/cli/cli.go#runGate s1:2b68e51020262f2b
+    %% dinyd: internal/cli/cli.go#runGate s1:c6687d5ee04bb598
     Default@{ shape: docs, label: "Managed local records<br/><small>• Active file and whole segments<br/>• Shared by linked worktrees</small>" }
     %% dinyd: internal/gate/gate.go#writeRecords s1:ca09717033ae166a
     %% dinyd: internal/record/record.go#DefaultPath s1:ca79b9c2bc10b015

@@ -17,6 +17,7 @@ import (
 
 	"github.com/undervoke/ytif/internal/check"
 	"github.com/undervoke/ytif/internal/cirecords"
+	"github.com/undervoke/ytif/internal/gitx"
 	"github.com/undervoke/ytif/internal/inventory"
 	"github.com/undervoke/ytif/internal/record"
 	"github.com/undervoke/ytif/internal/storage"
@@ -138,6 +139,7 @@ type verificationOut struct {
 	Hits       map[string]int     `json:"hits"`
 	OnBranch   bool               `json:"on_branch"`
 	RecentFail bool               `json:"recent_fail"`
+	Plans      []planTraceOut     `json:"plans,omitempty"`
 }
 
 type processOut struct {
@@ -283,6 +285,7 @@ func build(repo string, inv inventory.Inventory, src Sources, now time.Time) boa
 	d.Processes = procs
 	hits := record.Hits(window(lines, now, settings))
 	onBranch, recentFail := flags(lines, ix, src.Branch, now.AddDate(0, 0, -settings.RecentFailDays))
+	traces := tracePlans(local, remote)
 
 	for _, e := range inv.Verifications {
 		k := e.Key().String()
@@ -309,6 +312,7 @@ func build(repo string, inv inventory.Inventory, src Sources, now time.Time) boa
 			Hits:       h,
 			OnBranch:   onBranch[k],
 			RecentFail: recentFail[k],
+			Plans:      traces[k],
 		})
 	}
 	d.Summary = summarize(settings, d.Verifications, means, ix, src.Branch)
@@ -728,6 +732,115 @@ func ofGates(m map[string]meanOut, gates []string) map[string]meanOut {
 	for _, g := range gates {
 		if v, ok := m[g]; ok {
 			out[g] = v
+		}
+	}
+	return out
+}
+
+// planTraceOut is the latest execution plan for one verification at one gate
+// in one record population. It carries policy, the offered inputs, and the
+// scope the verifier actually reported; a nil reported scope stays unknown
+// so old records never invent one. Means, hits, and statistics are untouched.
+type planTraceOut struct {
+	Gate            string              `json:"gate"`
+	Source          string              `json:"source"` // local | ci
+	Profile         string              `json:"profile,omitempty"`
+	Requested       string              `json:"requested,omitempty"`
+	Resolved        string              `json:"resolved,omitempty"`
+	Origin          string              `json:"origin,omitempty"`
+	Run             bool                `json:"run"`
+	Reason          string              `json:"reason,omitempty"`
+	Offered         string              `json:"offered,omitempty"`
+	Targets         int                 `json:"targets"`
+	Expansion       string              `json:"expansion,omitempty"`
+	Reported        string              `json:"reported,omitempty"` // empty means unknown
+	ReportedTargets *int                `json:"reported_targets,omitempty"`
+	Comparison      *check.Comparison   `json:"comparison,omitempty"`
+	CompareHead     string              `json:"compare_head,omitempty"` // raw comparison head even when full
+	Target          *gitx.TargetContext `json:"target,omitempty"`
+	ContextSource   string              `json:"context_source,omitempty"`
+	Base            string              `json:"base,omitempty"` // execution base (snapshot)
+	Head            string              `json:"head,omitempty"` // execution HEAD (snapshot)
+}
+
+// tracePlans keeps the latest finalized plan per verification, gate and source.
+// Selection includes skips and execution-time widening; older records without
+// plans continue to contribute statistics without inventing scope information.
+func tracePlans(local, remote []record.Line) map[string][]planTraceOut {
+	out := map[string][]planTraceOut{}
+	merge := func(m map[string][]planTraceOut) {
+		for k, v := range m {
+			out[k] = append(out[k], v...)
+		}
+	}
+	merge(sourcePlans(local, "local"))
+	merge(sourcePlans(remote, "ci"))
+	order := map[string]int{}
+	for i, g := range gateOrder {
+		order[g] = i
+	}
+	for k := range out {
+		sort.Slice(out[k], func(i, j int) bool {
+			if out[k][i].Gate != out[k][j].Gate {
+				return order[out[k][i].Gate] < order[out[k][j].Gate]
+			}
+			return out[k][i].Source < out[k][j].Source
+		})
+	}
+	return out
+}
+
+// sourcePlans reads self-contained final selections. File order is irrelevant;
+// recordLines gives every line in an attempt the same finalization timestamp.
+func sourcePlans(lines []record.Line, source string) map[string][]planTraceOut {
+	type verKey struct{ key, gate string }
+	type chosen struct {
+		time  time.Time
+		id    string
+		trace planTraceOut
+	}
+	latest := map[verKey]chosen{}
+	for _, l := range lines {
+		if l.Kind != record.KindSelection || l.Selection == nil {
+			continue
+		}
+		sel := l.Selection
+		for _, p := range sel.Plans {
+			if p.Key == "" {
+				continue
+			}
+			k := verKey{p.Key, l.Gate}
+			if old, ok := latest[k]; ok &&
+				(old.time.After(l.Time) || old.time.Equal(l.Time) && old.id <= l.Attempt) {
+				continue
+			}
+			tr := planFromCheck(p)
+			tr.Gate, tr.Source, tr.Profile = l.Gate, source, sel.Profile
+			tr.Comparison, tr.Target = sel.Comparison, sel.Target
+			tr.ContextSource, tr.CompareHead = sel.ContextSource, sel.CompareHead
+			tr.Base, tr.Head = sel.Base, sel.Head
+			latest[k] = chosen{l.Time, l.Attempt, tr}
+		}
+	}
+	out := map[string][]planTraceOut{}
+	for k, c := range latest {
+		out[k.key] = append(out[k.key], c.trace)
+	}
+	return out
+}
+
+// planFromCheck renders one check.Plan without its in-memory inputs.
+func planFromCheck(p check.Plan) planTraceOut {
+	out := planTraceOut{
+		Requested: string(p.Requested), Resolved: string(p.Resolved),
+		Origin: p.Origin, Run: p.Run, Reason: p.Reason,
+		Offered: p.Offered, Targets: p.Targets, Expansion: p.Expansion,
+	}
+	if p.Reported != nil {
+		out.Reported = string(p.Reported.Scope)
+		if p.Reported.Targets != nil {
+			v := *p.Reported.Targets
+			out.ReportedTargets = &v
 		}
 	}
 	return out

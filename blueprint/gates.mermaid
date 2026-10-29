@@ -12,25 +12,21 @@ config:
   flowchart:
     wrappingWidth: 270
 ---
-%% Behavior authority: internal/gate/gate.go (Run), internal/gate/survey.go, internal/affected/affected.go and README.md (Gates).
-%% dinyd: internal/gate/gate.go#Run s1:48aeaded1e0ab95a
+%% Behavior authority: internal/gate/gate.go (Run), internal/gate/survey.go, internal/gate/plans.go and README.md (Gates).
+%% dinyd: internal/gate/gate.go#Run s1:f7690a3f1e794db6
 %% Invalid input exits before record creation. Admission findings reconcile and finish as an incomplete failed attempt, recorded when enabled.
-%% Affected selection covers registered work, not a complete census. A valid empty result does not trigger fallback; unresolved verification scopes still run.
-%% list uses complete discovery separately. A full local gate activates only sources owning selected members; effective-full CI activates every source.
-%% dinyd: internal/gate/survey.go#NewSurvey s1:1dcd730c4a5522ac
+%% The mandatory gate policy plans every member; narrowing that cannot be resolved widens to full with a reason. A valid empty selection skips without fallback.
+%% list uses complete discovery separately. A gate run activates only sources owning runnable selections; effective-full CI activates every source.
+%% dinyd: internal/gate/survey.go#NewSurvey s1:687bd091fdb64691
 flowchart TB
   Input["Validate configuration and revisions<br/><small>Admission runs before project execution</small>"]
   Invalid["Report input or load error<br/><small>No records are written</small>"]
   Rejected["Reconcile admission findings<br/><small>No Nx, preparation, discovery or execution</small>"]
   Members["Gate members<br/><small>• check and commit opt in independently<br/>• push includes all except skip-push<br/>• CI includes all verifications</small>"]
   %% dinyd: internal/inventory/inventory.go#Entry.Member s1:b9c171c2f6703344
-  Mode{"Affected requested?<br/><small>Host supplies the comparison base</small>"}
-  Nx{"Usable Nx result?"}
-  %% dinyd: internal/affected/affected.go#NxFiles s1:8f314da9552c6164
-  Full["Keep all gate members<br/><small>Effective mode: full</small>"]
-  Affected["Keep affected and unresolved members<br/><small>Commands have unknown dependency scope</small>"]
-  %% dinyd: internal/affected/affected.go#Graph.Unaffected s1:a5c4be89c62d7ba9
-  Census{"CI with effective full mode?"}
+  Plans["Per-key plans from the mandatory policy<br/><small>• Most specific scope wins; full keeps the registered invocation</small>"]
+  Outcomes["Resolve each plan against the comparison<br/><small>• Run full, run narrowed, or skip<br/>• Unresolvable narrowing widens to full with a reason</small>"]
+  Census{"Effective-full CI?<br/><small>Every plan runs full</small>"}
   All["Activate every source<br/><small>Complete discovery, including unregistered work</small>"]
   Selected["Activate selected sources<br/><small>Inactive sources are not judged missing or stale</small>"]
   Discover["Prepare and discover<br/><small>Only active sources need preparation</small>"]
@@ -40,26 +36,22 @@ flowchart TB
   %% dinyd: internal/gate/gate.go#closeCoRuns s1:0d6266841e3d3efc
   %% dinyd: internal/gate/survey.go#Survey.placementOrder s1:b5ab8cad6cf0cc71
   Run["Execute runnable selections<br/><small>Shared process limit and command-exclusive tokens</small>"]
-  %% dinyd: internal/proc/proc.go#Run s1:ef10d4d2314b589e
-  %% dinyd: internal/checkrun/checkrun.go#Source.execute s1:276c8ae375a5dd22
+  %% dinyd: internal/proc/proc.go#Run s1:2705dd6f8623d0d8
+  %% dinyd: internal/checkrun/checkrun.go#Source.execute s1:86e3034971840243
   Finish["Aggregate verdict and record when enabled<br/><small>Keep outcomes distinct from selection and omission</small>"]
 
   Input -->|Invalid input or load failure| Invalid
   Input -->|Admission rejected| Rejected
   Rejected -->|Incomplete failed attempt| Finish
   Input -->|Admitted| Members
-  Members --> Mode
-  Mode -->|No| Full
-  Mode -->|Yes| Nx
-  Nx -->|Unavailable or failed: record fallback| Full
-  Nx -->|Valid, including empty| Affected
-  Full --> Census
-  Affected --> Census
-  Census -->|Yes, including fallback| All
+  Members --> Plans
+  Plans --> Outcomes
+  Outcomes --> Census
+  Census -->|Yes| All
   Census -->|No| Selected
   All --> Discover
   Selected --> Discover
   Discover --> Reconcile --> Run --> Finish
 
   classDef em fill:#173d25,stroke:#86efac
-  class Affected,Census em
+  class Plans,Census em

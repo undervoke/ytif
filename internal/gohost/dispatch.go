@@ -84,9 +84,14 @@ func (g *group) keys() []check.Key {
 }
 
 // run builds the group's dispatcher through an overlay, runs it from the
-// repository root, and reads its results file.
+// repository root, and reads its results file. A heterogeneous scope group
+// shares one process context: narrowed plans in it did not consume a
+// narrowed execution, so each keeps its resolved scope and records the
+// shared execution in Expansion. The offered file list remains and the
+// report stays unknown.
 func (g *group) run(ctx context.Context, repo check.Repo, in check.Input) check.Report {
 	keys := g.keys()
+	markMixedExpansion(in, keys)
 	var rep check.Report
 	invocation := func(what string, elapsed time.Duration, err error) {
 		rep.Invocations = append(rep.Invocations, check.Invocation{
@@ -104,7 +109,10 @@ func (g *group) run(ctx context.Context, repo check.Repo, in check.Input) check.
 	}
 
 	results := filepath.Join(work, "results.jsonl")
-	req, err := json.Marshal(struct{ Files []string }{in.Files})
+	req, err := json.Marshal(struct {
+		Files   []string
+		EnvKeys []string
+	}{in.Files, check.RestoreKeys})
 	if err != nil {
 		invocation("run", 0, err)
 		return rep
@@ -113,6 +121,10 @@ func (g *group) run(ctx context.Context, repo check.Repo, in check.Input) check.
 	cmd.Dir = repo.Root
 	cmd.Stdin = bytes.NewReader(req)
 	cmd.Stdout, cmd.Stderr = repo.Log, repo.Log
+	// The process environment projects only a homogeneous scope, including
+	// providers: a mixed batch keeps the host Nx environment and omits the
+	// scalar scope, while a homogeneous batch applies the Nx bridge.
+	cmd.Env = in.ProcessEnvironment(cmd.Environ(), keys)
 	elapsed, runErr := proc.Run(ctx, cmd)
 
 	names := make([]string, len(g.funcs))
@@ -122,6 +134,21 @@ func (g *group) run(ctx context.Context, repo check.Repo, in check.Input) check.
 	rep.Results, err = dispatch.Results(results, keys, names, runErr)
 	invocation("run", elapsed, err)
 	return rep
+}
+
+func markMixedExpansion(in check.Input, keys []check.Key) {
+	if _, ok := in.HomogeneousScope(keys); ok {
+		return
+	}
+	for _, k := range keys {
+		p := in.Plans[k]
+		if p == nil || !p.Run || p.Resolved == check.ScopeFull || p.Resolved == "" {
+			continue
+		}
+		if p.Expansion == "" {
+			p.Expansion = "mixed-process-context"
+		}
+	}
 }
 
 // build writes the dispatcher source and overlay under work and compiles the
@@ -278,9 +305,17 @@ import (
 
 `
 
-// dispatchRuntime runs the entries in order. It needs only Go 1.18.
+// dispatchRuntime runs the entries in order. It snapshots the projected
+// ytif-owned environment at startup and restores it before each entry so a
+// check that mutates NX_BASE, NX_HEAD or YTIF_SCOPE cannot contaminate the
+// next call in the same process. The request carries the keys from
+// check.RestoreKeys; BASE_SHA stays host-owned and is never touched. It
+// needs only Go 1.18.
 const dispatchRuntime = `
 type caller func(context.Context, []any, io.Writer) (any, error)
+
+// The request carries the only variables the dispatcher restores per entry.
+// BASE_SHA stays host-owned.
 
 type entry struct {
 	name string
@@ -324,7 +359,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "ytif dispatcher: want the results file as the only argument")
 		os.Exit(2)
 	}
-	var req struct{ Files []string }
+	var req struct {
+		Files   []string
+		EnvKeys []string
+	}
 	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
 		fmt.Fprintln(os.Stderr, "ytif dispatcher: read request:", err)
 		os.Exit(2)
@@ -346,9 +384,32 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	ytifEnvKeys := req.EnvKeys
+	savedEnv := map[string]*string{}
+	for _, k := range ytifEnvKeys {
+		if v, ok := os.LookupEnv(k); ok {
+			cp := v
+			savedEnv[k] = &cp
+		} else {
+			savedEnv[k] = nil
+		}
+	}
+	restoreEnv := func() {
+		for _, k := range ytifEnvKeys {
+			if savedEnv[k] == nil {
+				os.Unsetenv(k)
+			} else {
+				os.Setenv(k, *savedEnv[k])
+			}
+		}
+	}
 	values := make([]any, len(entries))
 	passed := make([]bool, len(entries))
 	for i, e := range entries {
+		if ctx.Err() != nil {
+			break
+		}
+		restoreEnv()
 		args := make([]any, len(e.args))
 		blocker := ""
 		for j, a := range e.args {

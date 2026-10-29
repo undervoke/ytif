@@ -52,7 +52,10 @@ gate flags:
   --report github        emit GitHub Actions annotations
   --hook                 record commit/push as a hook-triggered run
   --records PATH         record file (required for CI recording)
-  --base REF             select Nx-affected verifications; absent means full
+  --base REF             comparison base (scope comes from the ledger)
+  --profile NAME         CI policy profile (ci only)
+  --head REF             comparison head for explicit CI context
+  --target-branch NAME   target identity for an explicit CI comparison
   --jobs N               bound concurrent processes (check: 2; other gates: CPU count)
 `
 
@@ -121,7 +124,13 @@ func runGate(ctx context.Context, name string, args []string, stdin io.Reader, s
 		defaultJobs = 2
 	}
 	jobs := fs.Int("jobs", defaultJobs, "run at most N processes at once")
-	base := fs.String("base", "", "select Nx-affected verifications since REF")
+	base := fs.String("base", "", "comparison base (scope comes from the ledger)")
+	var profile, head, targetBranch string
+	if name == check.GateCI {
+		fs.StringVar(&profile, "profile", "", "CI policy profile")
+		fs.StringVar(&head, "head", "", "comparison head; does not change the checkout")
+		fs.StringVar(&targetBranch, "target-branch", "", "target branch identity for the comparison")
+	}
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return usageError(stderr, fs, "takes no arguments")
 	}
@@ -140,7 +149,8 @@ func runGate(ctx context.Context, name string, args []string, stdin io.Reader, s
 		refs = stdin
 	}
 	return gate.Run(ctx, root, gate.Options{
-		Gate: name, Base: deref(base), Jobs: *jobs, Report: *report, Records: *records, Stdin: refs,
+		Gate: name, Base: deref(base), Profile: profile, Head: head, TargetBranch: targetBranch,
+		Jobs: *jobs, Report: *report, Records: *records, Stdin: refs,
 		Record: name == check.GateCheck || hook || name == check.GateCI && *records != "",
 		Stdout: stdout, Stderr: stderr, Sources: sources(), Config: configChecker(),
 	})

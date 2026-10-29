@@ -41,6 +41,7 @@ const (
 // file plus the merged verification list.
 type Inventory struct {
 	Version       int          `yaml:"version"`
+	Gate          GateConfig   `yaml:"gate"`
 	Vocabulary    Vocabulary   `yaml:"vocabulary,omitempty"`
 	Prepare       []Prep       `yaml:"prepare,omitempty"`
 	Board         BoardConfig  `yaml:"board,omitempty"`
@@ -222,24 +223,25 @@ type Prep struct {
 // execution fields. Origin identifies the file and list position the entry
 // was loaded from; it is diagnostics only and never serialized.
 type Entry struct {
-	Runner     string   `yaml:"runner"`
-	Unit       string   `yaml:"unit,omitempty"`
-	Name       string   `yaml:"name"`
-	Check      bool     `yaml:"check,omitempty"`
-	Commit     bool     `yaml:"commit,omitempty"`
-	SkipPush   bool     `yaml:"skip-push,omitempty"`
-	Run        []string `yaml:"run,omitempty"`
-	Cwd        string   `yaml:"cwd,omitempty"`
-	Exclusive  []string `yaml:"exclusive,omitempty"`
-	Tags       []string `yaml:"tags,omitempty"`
-	Requires   []Ref    `yaml:"requires,omitempty"`
-	Ensures    []Ref    `yaml:"ensures,omitempty"`
-	Accident   string   `yaml:"accident,omitempty"`
-	Detection  string   `yaml:"detection,omitempty"`
-	Impact     string   `yaml:"impact,omitempty"`
-	DeleteWhen string   `yaml:"delete_when,omitempty"`
-	Origin     string   `yaml:"-"` // file: verifications[i], diagnostics only
-	File       string   `yaml:"-"` // file the entry was defined in
+	Runner     string                       `yaml:"runner"`
+	Unit       string                       `yaml:"unit,omitempty"`
+	Name       string                       `yaml:"name"`
+	Check      bool                         `yaml:"check,omitempty"`
+	Commit     bool                         `yaml:"commit,omitempty"`
+	SkipPush   bool                         `yaml:"skip-push,omitempty"`
+	Scope      map[string]check.TargetScope `yaml:"scope,omitempty"`
+	Run        []string                     `yaml:"run,omitempty"`
+	Cwd        string                       `yaml:"cwd,omitempty"`
+	Exclusive  []string                     `yaml:"exclusive,omitempty"`
+	Tags       []string                     `yaml:"tags,omitempty"`
+	Requires   []Ref                        `yaml:"requires,omitempty"`
+	Ensures    []Ref                        `yaml:"ensures,omitempty"`
+	Accident   string                       `yaml:"accident,omitempty"`
+	Detection  string                       `yaml:"detection,omitempty"`
+	Impact     string                       `yaml:"impact,omitempty"`
+	DeleteWhen string                       `yaml:"delete_when,omitempty"`
+	Origin     string                       `yaml:"-"` // file: verifications[i], diagnostics only
+	File       string                       `yaml:"-"` // file the entry was defined in
 }
 
 // Ref names another inventoried verification.
@@ -360,9 +362,47 @@ type fragmentFile struct {
 	Verifications []Entry  `yaml:"verifications"`
 }
 
+// composeInventory is shared by the file loader and init's byte preflight.
+// realRoot seeds include-cycle detection when the root file already exists.
+func composeInventory(root string, raw Inventory, realRoot string) (Inventory, error) {
+	const display = InventoryFile
+	if raw.Version != inventoryVersion {
+		return Inventory{}, fmt.Errorf("%s: version %d, want %d", display, raw.Version, inventoryVersion)
+	}
+	if err := raw.Vocabulary.validate(); err != nil {
+		return Inventory{}, fmt.Errorf("%s: vocabulary: %w", display, err)
+	}
+	if err := validatePrepare(raw.Prepare, display); err != nil {
+		return Inventory{}, err
+	}
+	if err := raw.Board.validate(); err != nil {
+		return Inventory{}, fmt.Errorf("%s: board: %w", display, err)
+	}
+	if err := raw.Gate.validate(display); err != nil {
+		return Inventory{}, err
+	}
+	visited := map[string]bool{}
+	var stack []includeFrame
+	if realRoot != "" {
+		visited[realRoot] = true
+		stack = []includeFrame{{real: realRoot, display: display}}
+	}
+	l := &fileLoader{root: root, visited: visited, seen: map[check.Key]string{}, files: []LedgerFile{{Path: display}}}
+	if err := l.addEntries(display, raw.Verifications); err != nil {
+		return Inventory{}, err
+	}
+	if err := l.addIncludes(root, display, raw.Includes, stack); err != nil {
+		return Inventory{}, err
+	}
+	if err := validateEntryScopes(l.out, raw.Gate, display); err != nil {
+		return Inventory{}, err
+	}
+	raw.Verifications, raw.Files = l.out, l.files
+	return raw, nil
+}
+
 // LoadInventory reads InventoryFile under root and merges its recursively
-// included fragments. A missing root and a missing legacy file load as an
-// empty ledger. A legacy file alone, or beside the new root, is an error:
+// included fragments. A legacy file alone, or beside the new root, is an error:
 // the first points at migration, the second is a conflict. Includes resolve
 // relative to the file that declares them and must stay inside that file's
 // directory subtree, following symlinks; absolute references, escapes,
@@ -387,7 +427,7 @@ func LoadInventory(root string) (Inventory, error) {
 	case !newExists && oldExists:
 		return Inventory{}, fmt.Errorf("%s is the previous ledger format; run ytif migrate to convert it to %s", LegacyInventoryFile, InventoryFile)
 	case !newExists:
-		return Inventory{Version: inventoryVersion}, nil
+		return Inventory{}, fmt.Errorf("%s: missing ledger with required gate settings; run ytif init", InventoryFile)
 	}
 	if !newStat.Mode().IsRegular() {
 		return Inventory{}, fmt.Errorf("%s: not a regular file", InventoryFile)
@@ -396,38 +436,11 @@ func LoadInventory(root string) (Inventory, error) {
 	if err := decodeStrict(newPath, InventoryFile, &raw); err != nil {
 		return Inventory{}, err
 	}
-	if raw.Version != inventoryVersion {
-		return Inventory{}, fmt.Errorf("%s: version %d, want %d", InventoryFile, raw.Version, inventoryVersion)
-	}
-	if err := raw.Vocabulary.validate(); err != nil {
-		return Inventory{}, fmt.Errorf("%s: vocabulary: %w", InventoryFile, err)
-	}
-	if err := validatePrepare(raw.Prepare, InventoryFile); err != nil {
-		return Inventory{}, err
-	}
-	if err := raw.Board.validate(); err != nil {
-		return Inventory{}, fmt.Errorf("%s: board: %w", InventoryFile, err)
-	}
 	realRoot, err := filepath.EvalSymlinks(newPath)
 	if err != nil {
 		return Inventory{}, fmt.Errorf("%s: %w", InventoryFile, err)
 	}
-	l := &fileLoader{root: root, visited: map[string]bool{realRoot: true}, seen: map[check.Key]string{}, files: []LedgerFile{{Path: InventoryFile}}}
-	if err := l.addEntries(InventoryFile, raw.Verifications); err != nil {
-		return Inventory{}, err
-	}
-	if err := l.addIncludes(filepath.Dir(newPath), InventoryFile, raw.Includes, []includeFrame{{real: realRoot, display: InventoryFile}}); err != nil {
-		return Inventory{}, err
-	}
-	return Inventory{
-		Version:       raw.Version,
-		Vocabulary:    raw.Vocabulary,
-		Prepare:       raw.Prepare,
-		Board:         raw.Board,
-		Includes:      raw.Includes,
-		Verifications: l.out,
-		Files:         l.files,
-	}, nil
+	return composeInventory(root, raw, realRoot)
 }
 
 // LoadExemptions reads ExemptionsFile under root. A missing file is an empty
@@ -580,7 +593,11 @@ func decodeStrict(path, display string, v any) error {
 		return err
 	}
 	defer f.Close()
-	dec := yaml.NewDecoder(f)
+	return decodeDocument(f, display, v)
+}
+
+func decodeDocument(r io.Reader, display string, v any) error {
+	dec := yaml.NewDecoder(r)
 	dec.KnownFields(true)
 	if err := dec.Decode(v); err != nil {
 		if errors.Is(err, io.EOF) {
@@ -791,6 +808,9 @@ func Migrate(root string, out io.Writer) error {
 	if err := pre.Vocabulary.validate(); err != nil {
 		return fmt.Errorf("migrated output has invalid vocabulary: %w", err)
 	}
+	if err := pre.Gate.validate(InventoryFile); err != nil {
+		return fmt.Errorf("migrated output has invalid gate: %w", err)
+	}
 	seen := map[check.Key]string{}
 	for i := range pre.Verifications {
 		e := &pre.Verifications[i]
@@ -803,6 +823,9 @@ func Migrate(root string, out io.Writer) error {
 			return fmt.Errorf("migrated output %s: %w", e.Origin, err)
 		}
 		seen[k] = e.Origin
+	}
+	if err := validateEntryScopes(pre.Verifications, pre.Gate, InventoryFile); err != nil {
+		return fmt.Errorf("migrated output has invalid scope: %w", err)
 	}
 	f, err := os.OpenFile(newPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
@@ -922,7 +945,38 @@ func transformLegacy(doc *yaml.Node) (migrateCounts, error) {
 	if commandsIdx >= 0 {
 		top.Content = append(top.Content[:commandsIdx], top.Content[commandsIdx+2:]...)
 	}
+	insertLegacyGate(top)
 	return counts, nil
+}
+
+// insertLegacyGate adds the init gate after version.
+func insertLegacyGate(top *yaml.Node) {
+	for i := 0; i+1 < len(top.Content); i += 2 {
+		if top.Content[i].Value == "gate" {
+			return
+		}
+	}
+	scope := func(v string) *yaml.Node {
+		return &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "scope"},
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: v},
+		}}
+	}
+	gate := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "check"}, scope("file"),
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "commit"}, scope("file"),
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "push"}, scope("full"),
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "ci"}, scope("full"),
+	}}
+	key := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "gate"}
+	at := len(top.Content)
+	for i := 0; i+1 < len(top.Content); i += 2 {
+		if top.Content[i].Value == "version" {
+			at = i + 2
+			break
+		}
+	}
+	top.Content = append(top.Content[:at], append([]*yaml.Node{key, gate}, top.Content[at:]...)...)
 }
 
 // transformLegacyChecks converts each legacy check entry's placement into

@@ -1,0 +1,38 @@
+---
+title: ytif · how much of each verification a gate runs
+config:
+  look: handDrawn
+  handDrawnSeed: 5
+  theme: dark
+  themeVariables:
+    mainBkg: "#333333"
+    clusterBkg: "#242424"
+  themeCSS: |
+    small { display: inline-block; text-align: left; }
+---
+%% Behavior authority: blueprint/AGENTS.md (gate scope).
+flowchart TB
+  Member["Gate member"]
+  Scope{"Requested scope<br/><small>Most specific setting wins</small>"}
+  Files{"Can it take changed files?"}
+  Projects{"Is its project unaffected?"}
+  Changed["Changed files only"]
+  Full["Full"]
+  Skip["Skip"]
+  Record["Record<br/><small>requested · resolved · why</small>"]
+
+  Member --> Scope
+  Scope -->|file| Files
+  Scope -->|affected| Projects
+  Scope -->|full| Full
+  Files -->|Yes| Changed
+  Files -->|"Yes, none changed"| Skip
+  Files -->|"No or unknown"| Projects
+  Projects -->|Yes| Skip
+  Projects -->|"No or unknown"| Full
+  Changed --> Record
+  Full --> Record
+  Skip --> Record
+
+  classDef em fill:#173d25,stroke:#86efac
+  class Files,Projects em

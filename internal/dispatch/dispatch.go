@@ -17,7 +17,8 @@ import (
 )
 
 // Event is one line of a results file. Fields are untagged; JSON decoding
-// matches them case-insensitively.
+// matches them case-insensitively. Scope and Targets carry the verifier's
+// optional report() of the scope it actually ran.
 type Event struct {
 	I         int
 	Start     bool
@@ -25,6 +26,8 @@ type Event struct {
 	ElapsedNS int64
 	EndNS     int64 // Unix time of the outcome
 	Output    string
+	Scope     string
+	Targets   *int
 }
 
 // Results reads the results file of a dispatcher that ran keys, named
@@ -33,6 +36,7 @@ type Event struct {
 func Results(path string, keys []check.Key, names []string, runErr error) ([]check.Result, error) {
 	events, running, readErr := read(path, len(keys))
 	var results []check.Result
+	var scopeErr error
 	for _, e := range events {
 		r := check.Result{Key: keys[e.I], Outcome: check.Outcome(e.Outcome), Output: e.Output}
 		if e.EndNS != 0 {
@@ -40,6 +44,20 @@ func Results(path string, keys []check.Key, names []string, runErr error) ([]che
 		}
 		if r.Outcome != check.Blocked {
 			r.Elapsed, r.Timed = time.Duration(e.ElapsedNS), true
+		}
+		if e.Scope != "" {
+			scope := check.TargetScope(e.Scope)
+			if !scope.Valid() {
+				if scopeErr == nil {
+					scopeErr = fmt.Errorf("dispatcher reported scope %q", e.Scope)
+				}
+			} else if e.Targets != nil && *e.Targets < 0 {
+				if scopeErr == nil {
+					scopeErr = fmt.Errorf("dispatcher reported targets %d", *e.Targets)
+				}
+			} else {
+				r.ScopeReport = &check.ScopeReport{Scope: scope, Targets: e.Targets}
+			}
 		}
 		results = append(results, r)
 	}
@@ -55,6 +73,8 @@ func Results(path string, keys []check.Key, names []string, runErr error) ([]che
 		err = runErr
 	case readErr != nil:
 		err = readErr
+	case scopeErr != nil:
+		err = scopeErr
 	case running >= 0:
 		err = fmt.Errorf("dispatcher %s while running %s", exit, names[running])
 	case len(events) < len(keys):
