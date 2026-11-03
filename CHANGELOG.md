@@ -7,6 +7,8 @@ module proxy may already have cached that version.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-03
+
 ### Added
 
 - Mandatory `gate:` ledger policy: per-gate scope (`file`, `affected`, `full`) with optional named CI profiles carrying scope and comparison target. `push` maps to one profile with `ci-profile` to preview that profile's CI selection, and entries override the policy per gate or per CI profile with `scope:`.
@@ -240,7 +242,8 @@ Existing `version: 2` inventories remain compatible. `commands:` is optional and
 
 - Checks run without the hook repository's git environment variables.
 
-[Unreleased]: https://github.com/undervoke/ytif/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/undervoke/ytif/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/undervoke/ytif/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/undervoke/ytif/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/undervoke/ytif/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/undervoke/ytif/compare/v0.12.0...v0.13.0
