@@ -1,11 +1,10 @@
-// Package guard refuses agent shell commands that run checks, so checks
-// run only when git hooks and CI start the gates, which own their scope and
-// cost. It refuses a ytif gate, a test runner, a *.verify.mjs module, a
-// package script, Nx target, or Make goal named as a check, a formatter,
-// linter, or type checker in its checking mode, and a package script whose
-// commands do any of these. While the user allows it (ytif allow), they
-// pass; an agent's own ytif allow is always refused, so the permission
-// stays the user's.
+// Package guard refuses agent shell commands whose recorded duration predicts
+// they exceed the ledger's guard limit, so heavy verifications run only when
+// git hooks and CI start the gates, which own their scope and cost. It prices
+// ytif gates, registered commands, test runners, package scripts, and
+// Nx targets by local record elapsed time; unknown stays allowed. While the
+// user allows it (ytif allow), duration refusals lift; an agent's own ytif
+// allow is always refused, so the permission stays the user's.
 //
 // It reads a PreToolUse hook payload ({"cwd":...,"tool_input":{"command":...}})
 // and answers with the Claude Code and Codex deny decision. Anything it
@@ -20,14 +19,11 @@ import (
 	"io"
 	"os"
 	"path"
-	"regexp"
 	"strings"
 	"time"
 
 	"mvdan.cc/sh/v3/syntax"
 
-	"github.com/undervoke/ytif/internal/allow"
-	"github.com/undervoke/ytif/internal/check"
 	"github.com/undervoke/ytif/internal/gateconf"
 	"github.com/undervoke/ytif/internal/gitx"
 	"github.com/undervoke/ytif/internal/record"
@@ -35,8 +31,8 @@ import (
 )
 
 const (
-	refusal      = "(YTiF) Unauthorized verification executions are prohibited."
-	allowRefusal = "(YTiF) Only the user can allow verification executions."
+	durationRefusal = "(YTiF) This takes too long to run directly. Run a narrower verification for your changes. The gates cover the rest on commit, push, and CI, so do not rerun this in another form. Report it as left to the gates."
+	allowRefusal    = "(YTiF) Only the user can lift this limit. Run a narrower verification for your changes."
 )
 
 // Run handles one hook invocation. It always succeeds; a refusal is the
@@ -71,7 +67,7 @@ func runHook(stdin io.Reader, stdout, stderr io.Writer, cursor bool) {
 		return
 	}
 	g := &guard{cwd: payload.Cwd}
-	runner, reason := g.refused(command)
+	runner, reason, basis, recCommon := g.refused(command)
 	if runner == "" {
 		if cursor {
 			_ = json.NewEncoder(stdout).Encode(map[string]string{"permission": "allow"})
@@ -79,7 +75,7 @@ func runHook(stdin io.Reader, stdout, stderr io.Writer, cursor bool) {
 		return
 	}
 	if cursor {
-		_ = json.NewEncoder(stdout).Encode(map[string]string{"permission": "deny", "user_message": reason})
+		_ = json.NewEncoder(stdout).Encode(map[string]string{"permission": "deny", "user_message": reason, "agent_message": reason})
 	} else {
 		_ = json.NewEncoder(stdout).Encode(map[string]any{"hookSpecificOutput": map[string]string{
 			"hookEventName":            "PreToolUse",
@@ -87,12 +83,20 @@ func runHook(stdin io.Reader, stdout, stderr io.Writer, cursor bool) {
 			"permissionDecisionReason": reason,
 		}})
 	}
-	common, err := g.commonDir()
-	if err == nil {
-		err = recordRefusal(common, runner, command, stderr)
+	common := recCommon
+	if common == "" {
+		var err error
+		common, err = g.commonDir()
+		if err != nil {
+			common = ""
+		}
 	}
-	if err != nil {
-		fmt.Fprintf(stderr, "(YTiF) refusal not recorded: %v\n", err)
+	if common != "" {
+		if err := recordRefusal(common, runner, command, basis, stderr); err != nil {
+			fmt.Fprintf(stderr, "(YTiF) refusal not recorded: %v\n", err)
+		}
+	} else {
+		fmt.Fprintf(stderr, "(YTiF) refusal not recorded: no repository\n")
 	}
 }
 
@@ -102,7 +106,6 @@ type guard struct {
 	common    string
 	commonErr error
 	located   bool
-	allowed   *bool
 }
 
 func (g *guard) commonDir() (string, error) {
@@ -111,18 +114,6 @@ func (g *guard) commonDir() (string, error) {
 		g.located = true
 	}
 	return g.common, g.commonErr
-}
-
-// allowance reports whether the user currently allows checks.
-func (g *guard) allowance() bool {
-	if g.allowed == nil {
-		ok := false
-		if common, err := g.commonDir(); err == nil {
-			_, ok = allow.Until(common, time.Now())
-		}
-		g.allowed = &ok
-	}
-	return *g.allowed
 }
 
 // commandText accepts a command string or an argv array.
@@ -146,40 +137,31 @@ func commandText(raw json.RawMessage) (string, bool) {
 	return strings.Join(quoted, " "), true
 }
 
-// refused returns what command runs that the guard refuses, with the
-// reason, or "". An agent's ytif allow is refused wherever the command or
-// a package script it runs reaches it, even while the user allows checks.
-// A check the command names is refused without reading the scripts it
-// runs; otherwise they are read for checks.
-func (g *guard) refused(command string) (runner, reason string) {
-	cmds, err := shellcmd.Parse(command)
-	if err != nil && len(cmds) == 0 {
-		return "", ""
+// refused returns what command runs that the guard refuses, with the fixed
+// model reason, the numeric record basis, and the common directory to record
+// in, or "". An agent's ytif allow is refused wherever a traversed script
+// reaches it, even while the user has lifted the limit. The grant is read
+// only after an over-limit estimate, from the repository that exceeded it.
+func (g *guard) refused(command string) (runner, reason, basis, recCommon string) {
+	if runner := findAllow(command, g.dir()); runner != "" {
+		return runner, allowRefusal, "", ""
 	}
-	s := newScripts(g.allowance)
-	cmds = s.expand(cmds, g.dir())
-	for _, c := range cmds {
-		if gateconf.RailCommand(c) == "allow" {
-			return "ytif allow", allowRefusal
-		}
+	steps, _, err := shellcmd.Steps(command)
+	if err != nil && len(steps) == 0 {
+		return "", "", "", ""
 	}
-	named := ""
-	for _, c := range cmds {
-		if named = checkRun(c); named != "" {
-			break
-		}
+	return g.durationRefused(steps)
+}
+
+// findAllow inspects all readable calls and package scripts, independently
+// of which paths have enough evidence to price.
+func findAllow(command, dir string) string {
+	s := newScripts()
+	s.inspect(command, dir, 0)
+	if s.allow {
+		return "ytif allow"
 	}
-	if named != "" && !g.allowance() {
-		return named, refusal
-	}
-	s.walk(cmds, g.dir(), 0)
-	switch {
-	case s.allow:
-		return "ytif allow", allowRefusal
-	case named == "" && s.hit != "" && !g.allowance():
-		return s.hit, refusal
-	}
-	return "", ""
+	return ""
 }
 
 // dir returns the directory the command starts in.
@@ -197,9 +179,6 @@ func (g *guard) dir() string {
 // whose package, found from dir ("" when unknown), has a script of that
 // name runs the script, which walk reads, rather than the binary.
 func (s *scripts) expand(cmds []shellcmd.Command, dir string) []shellcmd.Command {
-	if changesDir(cmds) {
-		dir = ""
-	}
 	var out []shellcmd.Command
 	var add func(c shellcmd.Command, depth int)
 	add = func(c shellcmd.Command, depth int) {
@@ -237,33 +216,6 @@ func setsDir(c shellcmd.Command) bool {
 	return false
 }
 
-// checkRun returns the check c runs, or "": a ytif gate, a test runner, a
-// verification module, a task named as a check, or a checking mode.
-func checkRun(c shellcmd.Command) string {
-	switch g := gateconf.RailCommand(c); g {
-	case check.GateCommit, check.GatePush, check.GateCI:
-		return "ytif " + g
-	}
-	if r := gateconf.TestRunner(c); r != "" {
-		return r
-	}
-	if m := gateconf.VerifyModule(c); m != "" {
-		return m
-	}
-	for _, t := range gateconf.TaskNames(c) {
-		if checkName.MatchString(t) {
-			return c.NameBase() + " " + t
-		}
-	}
-	return gateconf.CheckMode(c)
-}
-
-// checkName matches a task name with test, check, or verify as a word of
-// its own, set off by the ends of the name or by characters other than
-// letters and digits: test:fast, maps:check, verify-runtime-config, but not
-// typecheck or latest.
-var checkName = regexp.MustCompile(`(?i)(^|[^a-z0-9])(test|check|verify)([^a-z0-9]|$)`)
-
 func commonDir(cwd string) (string, error) {
 	if cwd == "" {
 		cwd, _ = os.Getwd()
@@ -275,13 +227,22 @@ func commonDir(cwd string) (string, error) {
 	return gitx.CommonDir(root)
 }
 
-// recordRefusal appends a guard line to the repository's managed records.
-func recordRefusal(commonDir, runner, command string, warn io.Writer) error {
-	if len(command) > 500 {
-		command = command[:500] + "…"
+// recordRefusal appends a guard line to the repository's managed records,
+// keeping the numeric estimate basis in the detail. The fixed model text
+// stays out of the record.
+func recordRefusal(commonDir, runner, command, basis string, warn io.Writer) error {
+	if len(command) > 300 {
+		command = command[:300] + "…"
+	}
+	detail := fmt.Sprintf("%s: %s", runner, command)
+	if basis != "" {
+		if len(basis) > 500 {
+			basis = basis[:500] + "…"
+		}
+		detail += " | " + basis
 	}
 	return record.AppendManaged(commonDir, []record.Line{{
 		Time: time.Now().UTC(), Attempt: record.NewAttempt(), Kind: record.KindGuard,
-		Runner: path.Base(strings.Fields(runner)[0]), Detail: fmt.Sprintf("%s: %s", runner, command),
+		Runner: path.Base(strings.Fields(runner)[0]), Detail: detail,
 	}}, warn)
 }

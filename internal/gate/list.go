@@ -25,7 +25,7 @@ func List(ctx context.Context, root string, sources []check.Source, config Confi
 	if !summary {
 		for _, e := range s.Result.Managed {
 			var gates []string
-			for _, g := range []string{check.GateCheck, check.GateCommit, check.GatePush, check.GateCI} {
+			for _, g := range []string{check.GateCommit, check.GatePush, check.GateCI} {
 				if e.Member(g) {
 					gates = append(gates, g)
 				}

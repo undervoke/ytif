@@ -56,7 +56,7 @@ type TargetContext struct {
 // comparison; an empty non-nil Changed is a valid empty set.
 func GateSnapshot(ctx context.Context, root string, o ComparisonOptions) (Snapshot, error) {
 	switch o.Gate {
-	case "check", "commit", "push", "ci":
+	case "commit", "push", "ci":
 	default:
 		return Snapshot{}, fmt.Errorf("unknown gate %q", o.Gate)
 	}
@@ -198,7 +198,7 @@ func GateSnapshot(ctx context.Context, root string, o ComparisonOptions) (Snapsh
 		return snap, nil
 	}
 	switch o.Gate {
-	case "check", "commit":
+	case "commit":
 		var base string
 		if explicitBase != "" {
 			base = explicitBase
@@ -211,23 +211,11 @@ func GateSnapshot(ctx context.Context, root string, o ComparisonOptions) (Snapsh
 			}
 			base = empty
 		}
-		var diff []byte
-		if o.Gate == "check" {
-			diff, err = gitCtx(ctx, root, nil, nil, "diff", "--name-only", "-z", "--no-renames", base)
-		} else {
-			diff, err = gitCtx(ctx, root, nil, nil, "diff", "--cached", "--name-only", "-z", "--no-renames", base)
-		}
+		diff, err := gitCtx(ctx, root, nil, nil, "diff", "--cached", "--name-only", "-z", "--no-renames", base)
 		if err != nil {
 			return Snapshot{}, err
 		}
 		changed := unionSorted(splitZ(diff), nil)
-		if o.Gate == "check" {
-			other, err := gitCtx(ctx, root, nil, nil, "ls-files", "--others", "--exclude-standard", "-z")
-			if err != nil {
-				return Snapshot{}, err
-			}
-			changed = unionSorted(changed, splitZ(other))
-		}
 		if changed == nil {
 			changed = []string{}
 		}
@@ -242,17 +230,9 @@ func GateSnapshot(ctx context.Context, root string, o ComparisonOptions) (Snapsh
 		}
 		snap.Base = base
 		snap.Changed = changed
-		kind := "worktree"
-		if o.Gate == "commit" {
-			kind = "index"
-		}
-		snap.Comparison = &Comparison{Kind: kind, Base: base}
+		snap.Comparison = &Comparison{Kind: "index", Base: base}
 		snap.Target = tgt
-		if o.Gate == "check" {
-			snap.ContextSource = "worktree"
-		} else {
-			snap.ContextSource = "index"
-		}
+		snap.ContextSource = "index"
 		return snap, nil
 	case "push":
 		if len(tips) == 0 {

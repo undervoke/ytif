@@ -1,12 +1,8 @@
 // Package checkrun runs the project's registered direct commands as the
-// command runner, and judges which registrations check may admit.
+// command runner.
 //
 // A command entry carries its own argv, so the source is self-registering:
 // discovery returns the registered keys without starting any process.
-// CheckAdmission validates every check:true registration before execution
-// and never launches a process; the existing static recognizers read
-// project files but start nothing. An agent allowance never bypasses
-// admission: it takes no allow state, and its findings surface regardless.
 package checkrun
 
 import (
@@ -28,13 +24,6 @@ import (
 // Runner is the runner name this source owns: the inventory's direct
 // command runner.
 const Runner = inventory.CommandRunner
-
-// testKinds are the runners whose work is test work by kind. A check:true
-// registration on one of them is invalid without reading any command.
-var testKinds = map[string]bool{
-	"go-test": true, "bun-test": true, "node-test": true,
-	"dotnet-test": true, "vitest-test": true, "playwright-test": true,
-}
 
 // Source runs the registered direct commands a gate selects. Commands run
 // with the gate's worker count and atomic exclusive tokens, and their
@@ -244,28 +233,19 @@ func workingDir(root, dir string) string {
 	return filepath.Join(root, dir)
 }
 
-// AdmissionIssue is one reason a registration cannot run at check, or one
-// malformed command entry whatever gate might run it.
+// AdmissionIssue is one malformed command entry whatever gate might run it.
 type AdmissionIssue struct {
-	Key check.Key // zero when the issue is on a prepare step, not an entry
-	// Location names the registration: verifications[i] or prepare[i].
+	Key check.Key // entry key
+	// Location names the registration: verifications[i].
 	Location string
 	Detail   string
 }
 
-// CheckAdmission validates every check:true entry before execution, plus
-// the shape of every command entry whatever gate might run it. Test kinds
-// and go-verify are rejected by kind; command argv and the prepare steps of
-// check-enabled runners go through the existing static inspector, which
-// reads project files but never launches a process. node-verify bodies are
-// not analyzed: its dispatcher runs tracked files directly with no compile
-// step, so hidden build or test work a function body spawns stays the
-// host's responsibility. Duplicate command keys are the inventory loader's
-// finding, not this one's.
-func CheckAdmission(root string, entries []inventory.Entry, prepare []inventory.Prep) []AdmissionIssue {
+// ValidateCommands validates the shape of every command entry whatever gate
+// might run it. Duplicate command keys are the inventory loader's finding,
+// not this one's.
+func ValidateCommands(entries []inventory.Entry) []AdmissionIssue {
 	var out []AdmissionIssue
-	atCheck := map[string]bool{}
-	inspector := newInspector(root)
 	for i, e := range entries {
 		loc := e.Origin
 		if loc == "" {
@@ -274,47 +254,7 @@ func CheckAdmission(root string, entries []inventory.Entry, prepare []inventory.
 		if e.Runner == Runner {
 			if strings.TrimSpace(e.Name) == "" || len(e.Run) == 0 || e.Run[0] == "" {
 				out = append(out, AdmissionIssue{Key: e.Key(), Location: loc, Detail: "command entry needs a name and run argv"})
-				continue
 			}
-		}
-		if !e.Check {
-			continue
-		}
-		atCheck[e.Runner] = true
-		switch {
-		case testKinds[e.Runner]:
-			out = append(out, AdmissionIssue{Key: e.Key(), Location: loc,
-				Detail: fmt.Sprintf("%q is test work by kind and cannot run at check", e.Runner)})
-		case e.Runner == "go-verify":
-			out = append(out, AdmissionIssue{Key: e.Key(), Location: loc,
-				Detail: "go-verify compiles its dispatcher before running; that build work cannot run at check"})
-		case e.Runner == Runner:
-			inspector.visits = 0
-			if why := inspector.script(commandText(e.Run), workingDir(root, e.Cwd)); why != "" {
-				out = append(out, AdmissionIssue{Key: e.Key(), Location: loc,
-					Detail: fmt.Sprintf("runs %s; check excludes builds, tests, gate recursion and the user allowance", why)})
-			}
-		case e.Runner == "node-verify":
-			// Admitted without body analysis; see the doc comment above.
-		default:
-			// Bounded recognition: admission reports what the static
-			// inspector recognizes and claims nothing about other kinds.
-		}
-	}
-	for i, p := range prepare {
-		var runners []string
-		for _, r := range p.Runners {
-			if atCheck[r] {
-				runners = append(runners, r)
-			}
-		}
-		if len(runners) == 0 {
-			continue
-		}
-		inspector.visits = 0
-		if why := inspector.script(commandText(p.Run), root); why != "" {
-			out = append(out, AdmissionIssue{Location: fmt.Sprintf("prepare[%d]", i),
-				Detail: fmt.Sprintf("runs %s for check-enabled runners (%s); check excludes builds, tests, gate recursion and the user allowance", why, strings.Join(runners, ", "))})
 		}
 	}
 	return out

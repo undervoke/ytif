@@ -1,6 +1,6 @@
 "use strict";
 // ytif board: hash-routed pages over one embedded data document.
-//   #/verifications?tags=a,b&gates=check,commit&q=&runner=&hit=&time=&state=&file=&group=&view=
+//   #/verifications?tags=a,b&gates=commit&q=&runner=&hit=&time=&state=&file=&group=&view=
 //                                                verifications and process time
 //   #/verification/<key>                         relation diagram around one verification
 //   #/vocabulary                                 built-in and project vocabulary
@@ -42,7 +42,7 @@ const T = {
     gates: "Gates", hitGroup: "Hit", hitYes: "yes", hitNo: "no",
     avgGroup: "Average sum", atLeast: v => `≥ ${v}`,
     stateGroup: "State", stateNoSample: "no time samples", stateBranch: "ran on this branch", stateFail: `failed in the last ${CRITERIA.recent_fail_days} days`,
-    membershipNote: "Every verification belongs to CI and, unless skip-push, to push. check and commit are independent opt-ins.",
+    membershipNote: "Every verification belongs to CI and, unless skip-push, to push. commit is an independent opt-in.",
     colImpact: "Impact · verification", colUnit: "Execution unit", colWhat: "Task · runner · unit", colAvg: "Average sum",
     more: (k, r) => `${k} more · ${r} left`,
     noMatch: "No verification matches.", noVerifications: "The ledger has no verifications.",
@@ -77,7 +77,7 @@ const T = {
     vocabLede: "A tag name is unique across groups, so a tag alone names its group. Every project shares the ytif built-in vocabulary; a project declares its own groups under vocabulary at the top of ytif-verifications.yaml. Select a count to list those verifications.",
     colGroup: "Group", colRule: "Per verification", colTag: "Tag", colLabel: "Label", colOwner: "Owner", colUses: "Uses",
     ruleMany: "Any number", ruleOne: "Exactly one", ownYtif: "ytif built-in", ownProject: "Project",
-    when: "When", whenSub: "Member of", whenText: "Not a tag: gate membership (check and commit are opt-ins; every verification belongs to CI and, unless skip-push, to push).",
+    when: "When", whenSub: "Member of", whenText: "Not a tag: gate membership (commit is an opt-in; every verification belongs to CI and, unless skip-push, to push).",
   },
   ko: {
     tabVerifications: "검증", tabDiagram: "다이어그램", tabVocab: "어휘표", langName: "한국어", language: "언어",
@@ -107,7 +107,7 @@ const T = {
     gates: "gate", hitGroup: "hit", hitYes: "있음", hitNo: "없음",
     avgGroup: "평균 합", atLeast: v => `${v} 이상`,
     stateGroup: "상태", stateNoSample: "시간 표본 없음", stateBranch: "이 branch에서 실행됨", stateFail: `최근 ${CRITERIA.recent_fail_days}일 fail`,
-    membershipNote: "모든 검증은 CI에 속하고, skip-push가 아니면 push에도 속합니다. check와 commit은 각각 지정합니다.",
+    membershipNote: "모든 검증은 CI에 속하고, skip-push가 아니면 push에도 속합니다. commit은 따로 지정합니다.",
     colImpact: "영향 · 검증", colUnit: "실행 단위", colWhat: "작업 · runner · 실행 단위", colAvg: "평균 합",
     more: (k, r) => `${k}개 더 보기 · ${r}개 남음`,
     noMatch: "조건에 맞는 검증이 없습니다.", noVerifications: "ledger에 검증이 없습니다.",
@@ -142,7 +142,7 @@ const T = {
     vocabLede: "태그 이름은 묶음이 달라도 겹치지 않아서, 태그 하나로 묶음이 정해집니다. ytif 내장 어휘는 모든 프로젝트가 같이 쓰고, 프로젝트 어휘는 ytif-verifications.yaml 맨 위 vocabulary에 선언합니다. 사용 수를 누르면 그 태그로 걸러진 검증 목록으로 갑니다.",
     colGroup: "묶음", colRule: "검증마다", colTag: "태그", colLabel: "표시", colOwner: "소유", colUses: "사용 수",
     ruleMany: "여러 개 가능", ruleOne: "정확히 1개", ownYtif: "ytif 내장", ownProject: "프로젝트",
-    when: "When", whenSub: "소속 gate", whenText: "태그가 아닙니다. gate 소속(check·commit은 지정, 모든 검증은 CI와 skip-push 제외 시 push에 속함)을 씁니다.",
+    when: "When", whenSub: "소속 gate", whenText: "태그가 아닙니다. gate 소속(commit은 지정, 모든 검증은 CI와 skip-push 제외 시 push에 속함)을 씁니다.",
   },
 };
 
@@ -169,9 +169,9 @@ const when = iso => { try { return new Intl.DateTimeFormat(lang, { month: "2-dig
 const day = iso => { const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}` };
 const shares = (a, b) => a.some(v => b.includes(v));
 const href = key => "#/verification/" + encodeURIComponent(key);
-const GATES = ["check", "commit", "push", "ci"];
+const GATES = ["commit", "push", "ci"];
 const AND = new Set(["time", "state"]); // these groups need every chosen condition, others need any
-const gateColor = g => ({ check: "var(--accent)", commit: "var(--accent-2)", push: "var(--muted)", ci: "var(--warn-fg)" }[g] || "var(--muted)");
+const gateColor = g => ({ commit: "var(--accent-2)", push: "var(--muted)", ci: "var(--warn-fg)" }[g] || "var(--muted)");
 const splitParam = s => String(s || "").split(",").filter(Boolean);
 
 // ---- model ----
@@ -637,7 +637,6 @@ function sortRows(rows, sort) {
     avg: r => sumOf(r),
     hits: r => hitsOf(r),
     inventory: r => typeof r.id === "number" ? -r.id : 0,
-    check: r => r.means?.check?.ms ?? -1,
     commit: r => r.means?.commit?.ms ?? -1,
     push: r => r.means?.push?.ms ?? -1,
     ci: r => r.means?.ci?.ms ?? -1,
@@ -937,7 +936,7 @@ function tickPos(v, ticks) {
 }
 const scaleRight = (i, n) => i === n ? "3px" : `calc(${(((n - i) / n) * 100).toFixed(2)}% + 3px)`;
 // the fill covers the scale, so the value takes the ink of the segment under it
-const BAR_INK = { check: "var(--ink-check)", commit: "var(--ink-commit)", push: "var(--ink-push)", ci: "var(--ink-ci)" };
+const BAR_INK = { commit: "var(--ink-commit)", push: "var(--ink-push)", ci: "var(--ink-ci)" };
 // a sampled 0ms is a time; only rows without samples read as empty
 function timeBar(rows, ticks, bare) {
   const byGate = gateMs(rows), total = GATES.reduce((s, g) => s + byGate[g], 0), has = rows.some(sampled);

@@ -95,7 +95,7 @@ func loadSurvey(ctx context.Context, root string, sources []check.Source, config
 			s.Owner[r] = src
 		}
 	}
-	for _, issue := range checkrun.CheckAdmission(root, inv.Verifications, inv.Prepare) {
+	for _, issue := range checkrun.ValidateCommands(inv.Verifications) {
 		s.Admission = append(s.Admission, reconcile.Finding{Kind: reconcile.InvalidPlacement, Key: issue.Key, Location: issue.Location, Detail: issue.Detail})
 	}
 	for i, p := range inv.Prepare {
@@ -238,7 +238,7 @@ func (s *Survey) placementOrder() []reconcile.Finding {
 			if !ok {
 				continue
 			}
-			for _, g := range []string{check.GateCheck, check.GateCommit, check.GatePush, check.GateCI} {
+			for _, g := range []string{check.GateCommit, check.GatePush, check.GateCI} {
 				if e.Member(g) && !o.Member(g) {
 					findings = append(findings, reconcile.Finding{Kind: reconcile.PlacementOrder, Key: k, Detail: fmt.Sprintf("enabled at %s, but requires %s, which is not", g, other)})
 				}

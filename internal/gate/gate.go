@@ -59,9 +59,6 @@ func Run(ctx context.Context, root string, o Options) int {
 	jobs := o.Jobs
 	if jobs == 0 {
 		jobs = DefaultJobs
-		if o.Gate == check.GateCheck {
-			jobs = 2
-		}
 	}
 	ctx = proc.WithLimit(ctx, jobs)
 	s, err := loadSurvey(ctx, root, o.Sources, o.Config, o.Stderr, jobs)

@@ -30,7 +30,6 @@ import (
 const usageText = `usage: ytif <command> [flags]
 
 gates:
-  check                  run verifications enabled at check
   commit                 run verifications enabled at commit
   push                   run verifications except skip-push
   ci                     run all verifications
@@ -40,8 +39,8 @@ other:
   init [--hosts LIST]     pin this ytif, wire gates, and register selected agent hosts
   list                   show verifications and reconciliation findings
   board [--out PATH]     write the verification board as one HTML file and open it
-  guard [--host cursor]   agent hook: refuse direct verification runs
-  allow [DURATION|--off] let agents run verifications themselves for DURATION
+  guard [--host cursor]   agent hook: refuse long verification runs over the guard limit
+  allow [DURATION|--off] lift the verification time limit for DURATION
   update                 replace the ytif on PATH with the latest release
   version                print the version
 
@@ -56,7 +55,7 @@ gate flags:
   --profile NAME         CI policy profile (ci only)
   --head REF             comparison head for explicit CI context
   --target-branch NAME   target identity for an explicit CI comparison
-  --jobs N               bound concurrent processes (check: 2; other gates: CPU count)
+  --jobs N               bound concurrent processes (CPU count)
 `
 
 // Run executes one command and returns its exit code.
@@ -70,7 +69,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, version strin
 
 	cmd, rest := args[0], args[1:]
 	switch cmd {
-	case check.GateCheck, check.GateCommit, check.GatePush, check.GateCI:
+	case check.GateCommit, check.GatePush, check.GateCI:
 		return runGate(ctx, cmd, rest, stdin, stdout, stderr)
 	case "migrate":
 		if len(rest) != 0 {
@@ -119,11 +118,7 @@ func runGate(ctx context.Context, name string, args []string, stdin io.Reader, s
 	if name == check.GateCommit || name == check.GatePush {
 		fs.BoolVar(&hook, "hook", false, "record this hook-triggered run")
 	}
-	defaultJobs := gate.DefaultJobs
-	if name == check.GateCheck {
-		defaultJobs = 2
-	}
-	jobs := fs.Int("jobs", defaultJobs, "run at most N processes at once")
+	jobs := fs.Int("jobs", gate.DefaultJobs, "run at most N processes at once")
 	base := fs.String("base", "", "comparison base (scope comes from the ledger)")
 	var profile, head, targetBranch string
 	if name == check.GateCI {
@@ -151,7 +146,7 @@ func runGate(ctx context.Context, name string, args []string, stdin io.Reader, s
 	return gate.Run(ctx, root, gate.Options{
 		Gate: name, Base: deref(base), Profile: profile, Head: head, TargetBranch: targetBranch,
 		Jobs: *jobs, Report: *report, Records: *records, Stdin: refs,
-		Record: name == check.GateCheck || hook || name == check.GateCI && *records != "",
+		Record: hook || name == check.GateCI && *records != "",
 		Stdout: stdout, Stderr: stderr, Sources: sources(), Config: configChecker(),
 	})
 }
@@ -287,9 +282,9 @@ func runAllow(args []string, stdout, stderr io.Writer) int {
 		return gate.ExitUsage
 	}
 	if until, ok := allow.Until(common, now); ok {
-		fmt.Fprintf(stdout, "agents may run checks until %s\n", until.Local().Format("2006-01-02 15:04 MST"))
+		fmt.Fprintf(stdout, "agents may exceed the verification time limit until %s\n", until.Local().Format("2006-01-02 15:04 MST"))
 	} else {
-		fmt.Fprintln(stdout, "agents may not run checks")
+		fmt.Fprintln(stdout, "agents are held to the verification time limit")
 	}
 	return gate.ExitPass
 }

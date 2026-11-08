@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"go.yaml.in/yaml/v3"
 
@@ -38,16 +39,54 @@ const (
 )
 
 // Inventory is the verification ledger: shared configuration from the root
-// file plus the merged verification list.
+// file plus the merged verification list. Guard carries the root-only
+// agent-guard duration limit.
 type Inventory struct {
 	Version       int          `yaml:"version"`
 	Gate          GateConfig   `yaml:"gate"`
 	Vocabulary    Vocabulary   `yaml:"vocabulary,omitempty"`
 	Prepare       []Prep       `yaml:"prepare,omitempty"`
 	Board         BoardConfig  `yaml:"board,omitempty"`
+	Guard         GuardConfig  `yaml:"guard,omitempty"`
 	Includes      []string     `yaml:"includes,omitempty"`
 	Verifications []Entry      `yaml:"verifications"`
 	Files         []LedgerFile `yaml:"-"`
+}
+
+// GuardConfig sets the agent-guard duration limit. Zero keeps the default,
+// so a ledger states only what differs.
+type GuardConfig struct {
+	Limit string `yaml:"limit,omitempty"`
+}
+
+// DefaultGuardLimit is the duration estimate above which the agent guard
+// refuses a verification command.
+const DefaultGuardLimit = 2 * time.Minute
+
+// LimitDuration returns the configured guard limit, or the default when unset.
+func (g GuardConfig) LimitDuration() time.Duration {
+	if strings.TrimSpace(g.Limit) == "" {
+		return DefaultGuardLimit
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(g.Limit))
+	if err != nil || d <= 0 {
+		return DefaultGuardLimit
+	}
+	return d
+}
+
+func (g GuardConfig) validate(display string) error {
+	if strings.TrimSpace(g.Limit) == "" {
+		return nil
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(g.Limit))
+	if err != nil {
+		return fmt.Errorf("%s: guard.limit %q: want a duration like 2m", display, g.Limit)
+	}
+	if d <= 0 {
+		return fmt.Errorf("%s: guard.limit %q: want a positive duration", display, g.Limit)
+	}
+	return nil
 }
 
 // BoardConfig sets the statistics windows the board uses. Zero values keep
@@ -72,7 +111,6 @@ type Scales struct {
 // GateCounts counts something per gate. Strict decoding rejects a misnamed
 // gate, so a typo cannot silently keep the default.
 type GateCounts struct {
-	Check  int `yaml:"check,omitempty"`
 	Commit int `yaml:"commit,omitempty"`
 	Push   int `yaml:"push,omitempty"`
 	CI     int `yaml:"ci,omitempty"`
@@ -150,7 +188,6 @@ func (b BoardConfig) Settings() Settings {
 
 func (g GateCounts) byGate() map[string]int {
 	return map[string]int{
-		check.GateCheck:  g.Check,
 		check.GateCommit: g.Commit,
 		check.GatePush:   g.Push,
 		check.GateCI:     g.CI,
@@ -167,7 +204,7 @@ func (b BoardConfig) validate() error {
 		for _, n := range []struct {
 			gate string
 			v    int
-		}{{"check", f.g.Check}, {"commit", f.g.Commit}, {"push", f.g.Push}, {"ci", f.g.CI}} {
+		}{{"commit", f.g.Commit}, {"push", f.g.Push}, {"ci", f.g.CI}} {
 			if n.v < 0 {
 				return fmt.Errorf("%s: %s %d: want 0 or more", f.field, n.gate, n.v)
 			}
@@ -217,7 +254,7 @@ type Prep struct {
 // Entry is one verification's contract and gate membership. Tags describe
 // the accident in the built-in and project vocabularies; Requires and
 // Ensures name other inventoried verifications this one directly depends
-// on or keeps working. Check, Commit and SkipPush place the entry: every
+// on or keeps working. Commit and SkipPush place the entry: every
 // entry belongs to CI and, unless skipped, to push. Run, Cwd and Exclusive
 // are set only for CommandRunner entries and keep the direct-command
 // execution fields. Origin identifies the file and list position the entry
@@ -226,7 +263,6 @@ type Entry struct {
 	Runner     string                       `yaml:"runner"`
 	Unit       string                       `yaml:"unit,omitempty"`
 	Name       string                       `yaml:"name"`
-	Check      bool                         `yaml:"check,omitempty"`
 	Commit     bool                         `yaml:"commit,omitempty"`
 	SkipPush   bool                         `yaml:"skip-push,omitempty"`
 	Scope      map[string]check.TargetScope `yaml:"scope,omitempty"`
@@ -270,13 +306,11 @@ func (e Entry) Key() check.Key {
 	return check.Key{Runner: e.Runner, Unit: e.Unit, Name: e.Name}
 }
 
-// Member reports whether the entry runs at the named gate. Check and commit
+// Member reports whether the entry runs at the named gate. Commit
 // membership is explicit; every entry belongs to CI and, unless skipped,
 // to push. Unknown gate names are not members.
 func (e Entry) Member(gate string) bool {
 	switch gate {
-	case "check":
-		return e.Check
 	case check.GateCommit:
 		return e.Commit
 	case check.GatePush:
@@ -356,7 +390,7 @@ const (
 
 // fragmentFile is one included ledger fragment. Only includes and
 // verifications may appear here; strict decoding rejects the root-only
-// version, vocabulary, prepare and board fields.
+// version, vocabulary, prepare, board, guard and gate fields.
 type fragmentFile struct {
 	Includes      []string `yaml:"includes,omitempty"`
 	Verifications []Entry  `yaml:"verifications"`
@@ -377,6 +411,9 @@ func composeInventory(root string, raw Inventory, realRoot string) (Inventory, e
 	}
 	if err := raw.Board.validate(); err != nil {
 		return Inventory{}, fmt.Errorf("%s: board: %w", display, err)
+	}
+	if err := raw.Guard.validate(display); err != nil {
+		return Inventory{}, fmt.Errorf("%s: %w", display, err)
 	}
 	if err := raw.Gate.validate(display); err != nil {
 		return Inventory{}, err
@@ -648,7 +685,7 @@ func (l *fileLoader) addEntries(display string, entries []Entry) error {
 
 func (l *fileLoader) addIncludes(declDir, declDisplay string, includes []string, stack []includeFrame) error {
 	for _, inc := range includes {
-		target, err := resolveInclude(declDir, declDisplay, inc)
+		target, err := ResolveInclude(declDir, declDisplay, inc)
 		if err != nil {
 			return err
 		}
@@ -686,11 +723,11 @@ func (l *fileLoader) addIncludes(declDir, declDisplay string, includes []string,
 	return nil
 }
 
-// resolveInclude maps one include reference to a filesystem path. The
+// ResolveInclude maps one include reference to a filesystem path. The
 // reference is relative to the declaring file's directory and must name an
 // existing YAML regular file inside that directory's subtree, before and
 // after symlink resolution.
-func resolveInclude(declDir, declDisplay, inc string) (string, error) {
+func ResolveInclude(declDir, declDisplay, inc string) (string, error) {
 	if strings.TrimSpace(inc) == "" {
 		return "", fmt.Errorf("%s: empty include", declDisplay)
 	}
@@ -740,8 +777,8 @@ func relDisplay(root, path string) string {
 // rewrites the document tree so comments survive, and preflights the result
 // through the new strict reader before saving. Checks become verifications:
 // a commit placement becomes commit: true, push and ci placements become the
-// new push-and-CI default. Commands become runner: command entries with
-// check: true, keeping their name, run, cwd and exclusive fields. Skip-push
+// new push-and-CI default. Commands become runner: command entries keeping
+// their name, run, cwd and exclusive fields. Skip-push
 // is never assigned automatically; the notice names the resulting push and
 // CI expansion: the notice lists the exact keys that gain push membership
 // so the host can add explicit exclusions. The legacy file is
@@ -847,10 +884,10 @@ func Migrate(root string, out io.Writer) error {
 		return fmt.Errorf("wrote %s but could not remove %s: %w", InventoryFile, LegacyInventoryFile, err)
 	}
 	total := counts.commit + counts.preset + counts.commands
-	fmt.Fprintf(out, "migrated %s -> %s: %d verifications (%d commit:true, %d push+CI default, %d from commands as check:true)\n",
+	fmt.Fprintf(out, "migrated %s -> %s: %d verifications (%d commit:true, %d push+CI default, %d from commands)\n",
 		LegacyInventoryFile, InventoryFile, total, counts.commit, counts.preset, counts.commands)
 	if len(counts.gainedPush) > 0 {
-		fmt.Fprintf(out, "note: these gain push membership (old ci-only checks and check-only commands); ytif did not assign skip-push, add \"skip-push: true\" where push must not run them:\n")
+		fmt.Fprintf(out, "note: these gain push membership (old ci-only checks and commands); ytif did not assign skip-push, add \"skip-push: true\" where push must not run them:\n")
 		for _, k := range counts.gainedPush {
 			fmt.Fprintf(out, "  - %s\n", k)
 		}
@@ -946,7 +983,30 @@ func transformLegacy(doc *yaml.Node) (migrateCounts, error) {
 		top.Content = append(top.Content[:commandsIdx], top.Content[commandsIdx+2:]...)
 	}
 	insertLegacyGate(top)
+	insertLegacyGuard(top)
 	return counts, nil
+}
+
+// insertLegacyGuard adds the init guard after the gate when missing.
+func insertLegacyGuard(top *yaml.Node) {
+	for i := 0; i+1 < len(top.Content); i += 2 {
+		if top.Content[i].Value == "guard" {
+			return
+		}
+	}
+	limit := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "limit"},
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "2m"},
+	}}
+	key := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "guard"}
+	at := len(top.Content)
+	for i := 0; i+1 < len(top.Content); i += 2 {
+		if top.Content[i].Value == "gate" {
+			at = i + 2
+			break
+		}
+	}
+	top.Content = append(top.Content[:at], append([]*yaml.Node{key, limit}, top.Content[at:]...)...)
 }
 
 // insertLegacyGate adds the init gate after version.
@@ -963,7 +1023,6 @@ func insertLegacyGate(top *yaml.Node) {
 		}}
 	}
 	gate := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
-		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "check"}, scope("file"),
 		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "commit"}, scope("file"),
 		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "push"}, scope("full"),
 		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "ci"}, scope("full"),
@@ -1034,7 +1093,7 @@ func transformLegacyChecks(seq *yaml.Node, counts *migrateCounts) error {
 }
 
 // transformLegacyCommands converts each legacy command into a command
-// verification entry with check: true, reusing the original value nodes so
+// verification entry reusing the original value nodes so
 // comments survive.
 func transformLegacyCommands(seq *yaml.Node, counts *migrateCounts) ([]*yaml.Node, error) {
 	if isNull(seq) {
@@ -1089,7 +1148,6 @@ func transformLegacyCommands(seq *yaml.Node, counts *migrateCounts) ([]*yaml.Nod
 		if exclusive != nil {
 			add("exclusive", exclusive)
 		}
-		add("check", &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "true"})
 		out = append(out, entry)
 		counts.commands++
 		counts.gainedPush = append(counts.gainedPush, check.Key{Runner: CommandRunner, Unit: unit, Name: name.Value}.String())

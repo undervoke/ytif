@@ -449,7 +449,14 @@ func plan(root string, hosts []string, local bool) ([]file, []error) {
 		}
 		files = append(files, f)
 	}
-	add(ledger(root))
+	addAll := func(fs []file, err error) {
+		if err != nil {
+			errs = append(errs, err)
+			return
+		}
+		files = append(files, fs...)
+	}
+	addAll(ledger(root))
 	add(lefthook(root, wired))
 	var actions []string
 	if !wired.CI {
@@ -516,18 +523,19 @@ func read(root, rel string) ([]byte, bool, error) {
 	return data, err == nil, err
 }
 
-// ledgerText is a new ledger with init gate defaults and board windows as a comment.
+// ledgerText is a new ledger with init gate and guard defaults and board windows as a comment.
 func ledgerText() string {
 	d := inventory.BoardConfig{}.Settings()
 	a := d.Average
 	return fmt.Sprintf(`version: 3
 gate:
-  check: {scope: file}
   commit: {scope: file}
   push: {scope: full}
   ci: {scope: full}
+guard:
+  limit: 2m
 # board:  # statistics windows; an omitted value keeps the default shown
-#   average: {check: %d, commit: %d, push: %d, ci: %d}  # timed results per mean
+#   average: {commit: %d, push: %d, ci: %d}  # timed results per mean
 #   half_life_percent: %d  # a result's weight halves every this percent of its average window
 #   hits:
 #     days: %d  # how far back hits are counted
@@ -537,7 +545,7 @@ gate:
 #     verification: %s
 #     unit: %s  # group and process totals
 verifications: []
-`, a[check.GateCheck], a[check.GateCommit], a[check.GatePush], a[check.GateCI], d.HalfLife, d.HitDays, d.RecentFailDays, ticksText(d.Scales.Verification), ticksText(d.Scales.Unit))
+`, a[check.GateCommit], a[check.GatePush], a[check.GateCI], d.HalfLife, d.HitDays, d.RecentFailDays, ticksText(d.Scales.Verification), ticksText(d.Scales.Unit))
 }
 
 // ticksText writes ticks as a YAML flow list.
@@ -560,62 +568,330 @@ func skeleton(root, rel, text string) (file, error) {
 	return file{path: rel, want: []byte(text), status: "created"}, nil
 }
 
-// ledger creates a missing ledger and fills a missing gate.
-// It proves the candidate loads before writing.
-func ledger(root string) (file, error) {
+// ledger creates a missing ledger, removes retired check fields from the root
+// and its included fragments, and fills a missing gate and guard.
+// It proves the migrated composition loads before writing.
+func ledger(root string) ([]file, error) {
 	rel := inventory.InventoryFile
 	oldPath := filepath.Join(root, inventory.LegacyInventoryFile)
 	newPath := filepath.Join(root, rel)
 	if _, err := os.Stat(oldPath); err == nil {
 		if _, nerr := os.Stat(newPath); nerr == nil {
-			return file{}, fmt.Errorf("%s and %s both exist; keep one ledger and remove the other", inventory.LegacyInventoryFile, rel)
+			return nil, fmt.Errorf("%s and %s both exist; keep one ledger and remove the other", inventory.LegacyInventoryFile, rel)
 		}
-		return file{}, fmt.Errorf("%s is the previous ledger format; run ytif migrate to convert it to %s", inventory.LegacyInventoryFile, rel)
+		return nil, fmt.Errorf("%s is the previous ledger format; run ytif migrate to convert it to %s", inventory.LegacyInventoryFile, rel)
 	}
 	have, ok, err := read(root, rel)
 	if err != nil {
-		return file{}, err
+		return nil, err
 	}
 	if !ok {
 		data := []byte(ledgerText())
 		if _, err := inventory.ValidateCandidate(root, data); err != nil {
-			return file{}, err
+			return nil, err
 		}
-		return file{path: rel, want: data, status: "created"}, nil
+		return []file{{path: rel, want: data, status: "created"}}, nil
 	}
 	st, err := os.Stat(newPath)
 	if err != nil {
-		return file{}, err
+		return nil, err
 	}
 	if !st.Mode().IsRegular() {
-		return file{}, fmt.Errorf("%s: not a regular file", rel)
+		return nil, fmt.Errorf("%s: not a regular file", rel)
 	}
 	var doc yaml.Node
 	if err := yaml.Unmarshal(have, &doc); err != nil {
-		return file{}, fmt.Errorf("%s: %w", rel, err)
+		return nil, fmt.Errorf("%s: %w", rel, err)
 	}
 	if doc.Kind == 0 || len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
-		return file{}, fmt.Errorf("%s: want a mapping", rel)
+		return nil, fmt.Errorf("%s: want a mapping", rel)
 	}
 	top := doc.Content[0]
-	dirty, err := fillGate(top)
+	dirtyRemove, err := stripCheckRoot(top)
 	if err != nil {
-		return file{}, fmt.Errorf("%s: %w", rel, err)
+		return nil, fmt.Errorf("%s: %w", rel, err)
 	}
-	out, err := encodeYAML(&doc)
+	dirtyGate, err := fillGate(top)
 	if err != nil {
-		return file{}, fmt.Errorf("%s: %w", rel, err)
+		return nil, fmt.Errorf("%s: %w", rel, err)
 	}
-	if _, err := inventory.ValidateCandidate(root, out); err != nil {
-		return file{}, err
+	dirtyGuard, err := fillGuard(top)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", rel, err)
 	}
-	if !dirty {
-		return file{path: rel, want: have, status: "unchanged"}, nil
+	dirtyRoot := dirtyRemove || dirtyGate || dirtyGuard
+	rootOut, err := encodeYAML(&doc)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", rel, err)
 	}
-	if bytes.Equal(have, out) {
-		return file{path: rel, want: have, status: "unchanged"}, nil
+	frags, err := collectLedgerFragments(root, top, have)
+	if err != nil {
+		return nil, err
 	}
-	return compare(root, rel, out)
+	if len(frags) == 0 && !dirtyRoot {
+		if _, err := inventory.ValidateCandidate(root, have); err != nil {
+			return nil, err
+		}
+		return []file{{path: rel, want: have, status: "unchanged"}}, nil
+	}
+	tmp, err := os.MkdirTemp("", "ytif-init-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmp)
+	if err := os.WriteFile(filepath.Join(tmp, rel), rootOut, 0o644); err != nil {
+		return nil, err
+	}
+	for _, fr := range frags {
+		p := filepath.Join(tmp, filepath.FromSlash(fr.rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(p, fr.out, 0o644); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := inventory.LoadInventory(tmp); err != nil {
+		return nil, err
+	}
+	var out []file
+	if !dirtyRoot {
+		out = append(out, file{path: rel, want: have, status: "unchanged"})
+	} else if bytes.Equal(have, rootOut) {
+		out = append(out, file{path: rel, want: have, status: "unchanged"})
+	} else {
+		f, err := compare(root, rel, rootOut)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	for _, fr := range frags {
+		if !fr.dirty {
+			continue
+		}
+		f, err := compare(root, fr.rel, fr.out)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, nil
+}
+
+type ledgerFragment struct {
+	rel   string
+	out   []byte
+	dirty bool
+}
+
+func collectLedgerFragments(root string, rootTop *yaml.Node, rootHave []byte) ([]ledgerFragment, error) {
+	includes := yamlIncludes(rootTop)
+	if len(includes) == 0 {
+		return nil, nil
+	}
+	visited := map[string]bool{}
+	var stack []string
+	if real, err := filepath.EvalSymlinks(filepath.Join(root, inventory.InventoryFile)); err == nil {
+		visited[real] = true
+		stack = append(stack, real)
+	}
+	var out []ledgerFragment
+	var walk func(declDir, declDisplay string, incs []string, stack []string) error
+	walk = func(declDir, declDisplay string, incs []string, stack []string) error {
+		for _, inc := range incs {
+			target, display, real, err := resolveLedgerInclude(root, declDir, declDisplay, inc)
+			if err != nil {
+				return err
+			}
+			for _, s := range stack {
+				if s == real {
+					chain := append(append([]string{}, stack...), display)
+					return fmt.Errorf("include cycle: %s", strings.Join(chain, " -> "))
+				}
+			}
+			if visited[real] {
+				continue
+			}
+			visited[real] = true
+			data, err := os.ReadFile(target)
+			if err != nil {
+				return fmt.Errorf("%s: include %q: %w", declDisplay, inc, err)
+			}
+			var doc yaml.Node
+			if err := yaml.Unmarshal(data, &doc); err != nil {
+				return fmt.Errorf("%s: %w", display, err)
+			}
+			if doc.Kind == 0 || len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
+				return fmt.Errorf("%s: want a mapping", display)
+			}
+			fragTop := doc.Content[0]
+			dirty, err := stripCheckFragment(fragTop)
+			if err != nil {
+				return fmt.Errorf("%s: %w", display, err)
+			}
+			var fragOut []byte
+			if dirty {
+				fragOut, err = encodeYAML(&doc)
+				if err != nil {
+					return fmt.Errorf("%s: %w", display, err)
+				}
+			} else {
+				fragOut = data
+			}
+			out = append(out, ledgerFragment{rel: display, out: fragOut, dirty: dirty})
+			next := yamlIncludes(fragTop)
+			if len(next) > 0 {
+				if err := walk(filepath.Dir(target), display, next, append(stack, real)); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if err := walk(root, inventory.InventoryFile, includes, stack); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func yamlIncludes(top *yaml.Node) []string {
+	inc := lookup(top, "includes")
+	if inc == nil || inc.Kind != yaml.SequenceNode {
+		return nil
+	}
+	var out []string
+	for _, n := range inc.Content {
+		if n.Kind == yaml.ScalarNode {
+			out = append(out, n.Value)
+		}
+	}
+	return out
+}
+
+func resolveLedgerInclude(root, declDir, declDisplay, inc string) (target, display, real string, err error) {
+	joined, err := inventory.ResolveInclude(declDir, declDisplay, inc)
+	if err != nil {
+		return "", "", "", err
+	}
+	realTarget, err := filepath.EvalSymlinks(joined)
+	if err != nil {
+		return "", "", "", fmt.Errorf("%s: include %q: %w", declDisplay, inc, err)
+	}
+	relDisplay := joined
+	if rel, err := filepath.Rel(root, joined); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		relDisplay = filepath.ToSlash(rel)
+	}
+	return joined, relDisplay, realTarget, nil
+}
+
+func removeMappingKey(m *yaml.Node, key string) bool {
+	if m == nil || m.Kind != yaml.MappingNode {
+		return false
+	}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			m.Content = append(m.Content[:i], m.Content[i+2:]...)
+			return true
+		}
+	}
+	return false
+}
+
+func stripEntryCheck(entry *yaml.Node) (bool, error) {
+	if entry == nil || entry.Kind != yaml.MappingNode {
+		return false, nil
+	}
+	if err := editable(entry, "verifications"); err != nil {
+		return false, err
+	}
+	dirty := false
+	if removeMappingKey(entry, "check") {
+		dirty = true
+	}
+	if scope := lookup(entry, "scope"); scope != nil {
+		if scope.Kind == yaml.MappingNode {
+			if err := editable(scope, "scope"); err != nil {
+				return false, err
+			}
+			if removeMappingKey(scope, "check") {
+				dirty = true
+			}
+			if len(scope.Content) == 0 {
+				removeMappingKey(entry, "scope")
+			}
+		}
+	}
+	return dirty, nil
+}
+
+func stripVerifications(top *yaml.Node) (bool, error) {
+	seq := lookup(top, "verifications")
+	if seq == nil || seq.Kind != yaml.SequenceNode {
+		return false, nil
+	}
+	if err := editable(seq, "verifications"); err != nil {
+		return false, err
+	}
+	dirty := false
+	for _, e := range seq.Content {
+		d, err := stripEntryCheck(e)
+		if err != nil {
+			return false, err
+		}
+		dirty = dirty || d
+	}
+	return dirty, nil
+}
+
+// stripCheckRoot removes retired check fields from a root ledger.
+// Entries that had only check become push-and-CI members; nothing is promoted to commit.
+func stripCheckRoot(top *yaml.Node) (bool, error) {
+	dirty := false
+	if gate := lookup(top, "gate"); gate != nil && gate.Kind == yaml.MappingNode {
+		if err := editable(gate, "gate"); err != nil {
+			return false, err
+		}
+		if removeMappingKey(gate, "check") {
+			dirty = true
+		}
+	}
+	if board := lookup(top, "board"); board != nil && board.Kind == yaml.MappingNode {
+		if err := editable(board, "board"); err != nil {
+			return false, err
+		}
+		if avg := lookup(board, "average"); avg != nil && avg.Kind == yaml.MappingNode {
+			if err := editable(avg, "board.average"); err != nil {
+				return false, err
+			}
+			if removeMappingKey(avg, "check") {
+				dirty = true
+			}
+		}
+		if hits := lookup(board, "hits"); hits != nil && hits.Kind == yaml.MappingNode {
+			if err := editable(hits, "board.hits"); err != nil {
+				return false, err
+			}
+			if last := lookup(hits, "last"); last != nil && last.Kind == yaml.MappingNode {
+				if err := editable(last, "board.hits.last"); err != nil {
+					return false, err
+				}
+				if removeMappingKey(last, "check") {
+					dirty = true
+				}
+			}
+		}
+	}
+	d, err := stripVerifications(top)
+	if err != nil {
+		return false, err
+	}
+	return dirty || d, nil
+}
+
+// stripCheckFragment removes retired check fields from an included fragment.
+func stripCheckFragment(top *yaml.Node) (bool, error) {
+	return stripVerifications(top)
 }
 
 // fillGate adds a missing gate and missing scopes. It never overwrites a user value.
@@ -639,7 +915,7 @@ func fillGate(top *yaml.Node) (bool, error) {
 		return false, err
 	}
 	dirty := false
-	for _, name := range []string{"check", "commit", "push", "ci"} {
+	for _, name := range []string{"commit", "push", "ci"} {
 		sub := lookup(gate, name)
 		if sub == nil {
 			gate.Content = append(gate.Content, str(name), defaultGateEntry(name))
@@ -658,7 +934,7 @@ func fillGate(top *yaml.Node) (bool, error) {
 			return false, err
 		}
 		switch name {
-		case "check", "commit":
+		case "commit":
 			if lookup(sub, "scope") == nil {
 				sub.Content = append(sub.Content, str("scope"), str("file"))
 				dirty = true
@@ -679,10 +955,43 @@ func fillGate(top *yaml.Node) (bool, error) {
 	return dirty, nil
 }
 
+// fillGuard adds a missing guard limit. It never overwrites a user value.
+func fillGuard(top *yaml.Node) (bool, error) {
+	if err := editable(top, "the top level"); err != nil {
+		return false, err
+	}
+	guard := lookup(top, "guard")
+	if guard == nil {
+		top.Content = append(top.Content, str("guard"), defaultGuardNode())
+		return true, nil
+	}
+	if guard.Kind == yaml.ScalarNode && (guard.Tag == "!!null" || strings.TrimSpace(guard.Value) == "") {
+		*guard = *defaultGuardNode()
+		return true, nil
+	}
+	if guard.Kind != yaml.MappingNode {
+		return false, nil
+	}
+	if err := editable(guard, "guard"); err != nil {
+		return false, err
+	}
+	if lookup(guard, "limit") == nil {
+		guard.Content = append(guard.Content, str("limit"), str("2m"))
+		return true, nil
+	}
+	return false, nil
+}
+
+// defaultGuardNode is the init guard mapping.
+func defaultGuardNode() *yaml.Node {
+	return &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
+		str("limit"), str("2m"),
+	}}
+}
+
 // defaultGateNode is the init gate mapping.
 func defaultGateNode() *yaml.Node {
 	return &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
-		str("check"), defaultGateEntry("check"),
 		str("commit"), defaultGateEntry("commit"),
 		str("push"), defaultGateEntry("push"),
 		str("ci"), defaultGateEntry("ci"),
@@ -692,7 +1001,7 @@ func defaultGateNode() *yaml.Node {
 // defaultGateEntry is one init gate entry.
 func defaultGateEntry(name string) *yaml.Node {
 	scope := "full"
-	if name == "check" || name == "commit" {
+	if name == "commit" {
 		scope = "file"
 	}
 	return &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{

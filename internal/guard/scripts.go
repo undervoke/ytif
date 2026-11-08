@@ -16,22 +16,18 @@ import (
 	"github.com/undervoke/ytif/internal/shellcmd"
 )
 
-// scripts reads the package scripts an agent command runs, so a check
-// behind a script name is refused as if the agent had typed the script.
-// It reads only the scripts the command names, in the packages it selects,
-// with the pre and post scripts the package manager runs. What it cannot
-// resolve — a changed directory, an unsupported selection, a script past
-// its limits — it passes over: the gates, not the guard, are the authority.
+// scripts reads the package scripts an agent command runs, so an allow
+// behind a script name is refused as if the agent had typed it, and so a
+// script body can be priced. It reads only the scripts the command names,
+// in the packages it selects, with the pre and post scripts the package
+// manager runs. What it cannot resolve — a changed directory, an
+// unsupported selection, a script past its limits — it passes over: the
+// gates, not the guard, are the authority.
 type scripts struct {
-	// openChecks reports whether to read a script whose name is already a
-	// check, which matters only to find a ytif allow behind it.
-	openChecks func() bool
-	visits     int
-	seen       map[string]bool
-	manifests  map[string]*manifest
-	allow      bool   // a script runs ytif allow
-	hit        string // the first check a script runs
-	judge      func(shellcmd.Command, string) string
+	visits    int
+	seen      map[string]bool
+	manifests map[string]*manifest
+	allow     bool // a script runs ytif allow
 }
 
 const (
@@ -46,43 +42,126 @@ type manifest struct {
 	PackageManager string            `json:"packageManager"`
 }
 
-func newScripts(openChecks func() bool) *scripts {
-	return &scripts{openChecks: openChecks, seen: map[string]bool{}, manifests: map[string]*manifest{},
-		judge: func(c shellcmd.Command, _ string) string { return checkRun(c) }}
+func newScripts() *scripts {
+	return &scripts{seen: map[string]bool{}, manifests: map[string]*manifest{}}
 }
 
-// Inspect follows the same literal wrappers and package scripts as the guard,
-// using judge instead of the guard's refusal policy. Unknown directories and
-// unresolved script branches retain the guard's bounded, best-effort behavior.
-func Inspect(command, dir string, judge func(shellcmd.Command, string) string) string {
-	s := newScripts(func() bool { return true })
-	s.judge = judge
-	cmds, _ := shellcmd.Parse(command)
-	s.walk(s.expand(cmds, dir), dir, 0)
-	return s.hit
-}
-
-// walk judges cmds, run in dir ("" when unknown), and follows the package
-// scripts they run.
-func (s *scripts) walk(cmds []shellcmd.Command, dir string, depth int) {
-	if changesDir(cmds) {
-		dir = ""
+// inspect searches for self-grants without requiring a successful pricing
+// path. Commands can create a cd target after the hook runs, so a target
+// absent now must not stop the name scan. Package scripts are inspected in
+// each reachable literal directory; this deliberately overapproximates
+// branches because the user-only grant rule is independent of elapsed time.
+func (s *scripts) inspect(body, dir string, depth int) {
+	cmds, _ := shellcmd.Parse(body)
+	s.scan(depth, cmds...)
+	if s.allow {
+		return
 	}
+	dirs := []string{dir}
+	seen := map[string]bool{dir: true}
+	for i := 0; i < len(dirs) && i < maxScripts; i++ {
+		base := dirs[i]
+		s.walk(s.expand(cmds, base), base, depth)
+		if s.allow {
+			return
+		}
+		for _, c := range cmds {
+			target, literal := literalCdTarget(c)
+			if !literal {
+				continue
+			}
+			next, entered := followDir(base, target)
+			if entered && !seen[next] && len(dirs) < maxScripts {
+				seen[next] = true
+				dirs = append(dirs, next)
+			}
+		}
+	}
+}
+
+// walk finds a ytif allow in cmds and the package scripts they run.
+// Scripts are always traversed, without consulting any grant.
+func (s *scripts) walk(cmds []shellcmd.Command, dir string, depth int) {
 	for _, c := range cmds {
 		if gateconf.RailCommand(c) == "allow" {
 			s.allow = true
 		}
-		if h := s.judge(c, dir); h != "" && s.hit == "" {
-			s.hit = h
+		if depth < maxScriptDepth {
+			// cmds[1:] are the commands c runs itself, so a self-grant
+			// behind a wrapper, an eval, or a here-document is still read.
+			if more, _ := shellcmd.Expand(c); len(more) > 1 {
+				s.walk(s.expand(more[1:], dir), dir, depth+1)
+			}
 		}
 		run, ok := gateconf.PackageScript(c)
-		if !ok || dir == "" || c.Chdir || (checkName.MatchString(run.Name) && !s.openChecks()) {
+		if !ok || dir == "" || c.Chdir {
 			continue
 		}
 		for _, pkg := range s.packages(run, runBase(run, dir)) {
 			s.run(run, pkg, depth)
 		}
 	}
+}
+
+// scan looks for a ytif allow in the commands themselves and the nested
+// scripts they run, without reading a manifest: it serves a branch whose
+// outcome the guard cannot tell, where what was written still names a
+// self-grant.
+func (s *scripts) scan(depth int, cmds ...shellcmd.Command) {
+	for _, c := range cmds {
+		if gateconf.RailCommand(c) == "allow" {
+			s.allow = true
+			return
+		}
+		if depth < maxScriptDepth {
+			if more, _ := shellcmd.Expand(c); len(more) > 1 {
+				s.scan(depth+1, more[1:]...)
+				if s.allow {
+					return
+				}
+			}
+		}
+	}
+}
+
+// scriptBody is one package script text with the directory it runs in.
+type scriptBody struct {
+	text string
+	dir  string
+}
+
+// bodies returns the script texts a package script run expands to, with the
+// pre and post scripts the package manager runs. Nested scripts are left
+// for the caller to price; the seen guard bounds diamonds.
+func (s *scripts) bodies(r gateconf.ScriptRun, dir string) []scriptBody {
+	var out []scriptBody
+	for _, pkg := range s.packages(r, runBase(r, dir)) {
+		out = append(out, s.bodiesIn(r, pkg)...)
+	}
+	return out
+}
+
+func (s *scripts) bodiesIn(r gateconf.ScriptRun, dir string) []scriptBody {
+	m := s.manifest(dir)
+	if m == nil {
+		return nil
+	}
+	names := []string{r.Name}
+	if s.lifecycle(r, dir) {
+		names = []string{"pre" + r.Name, r.Name, "post" + r.Name}
+	}
+	var out []scriptBody
+	for _, name := range names {
+		body, ok := m.Scripts[name]
+		key := dir + "\x00" + name
+		if !ok || s.seen[key] || s.visits >= maxScripts {
+			continue
+		}
+		s.seen[key] = true
+		s.visits++
+		out = append(out, scriptBody{body, dir})
+	}
+	return out
 }
 
 // hasScript reports whether a package c runs in, from dir, has the script c
@@ -113,21 +192,9 @@ func runBase(r gateconf.ScriptRun, dir string) string {
 	return filepath.Join(dir, r.Dir)
 }
 
-// changesDir reports whether a script changes its directory, after which
-// the guard no longer knows where later commands run.
-func changesDir(cmds []shellcmd.Command) bool {
-	for _, c := range cmds {
-		switch c.Name() {
-		case "cd", "pushd", "popd":
-			return true
-		}
-	}
-	return false
-}
-
-// run reads script r.Name of the package in dir, with the words passed on
-// to it, and its pre and post scripts when the package manager runs them,
-// and walks their commands in that directory.
+// run looks for a ytif allow in script r.Name of the package in dir, with
+// the words passed on to it, and its pre and post scripts when the package
+// manager runs them.
 func (s *scripts) run(r gateconf.ScriptRun, dir string, depth int) {
 	m := s.manifest(dir)
 	if m == nil || depth >= maxScriptDepth {
@@ -149,8 +216,7 @@ func (s *scripts) run(r gateconf.ScriptRun, dir string, depth int) {
 		}
 		s.seen[key] = true
 		s.visits++
-		cmds, _ := shellcmd.Parse(body)
-		s.walk(s.expand(cmds, dir), dir, depth+1)
+		s.inspect(body, dir, depth+1)
 	}
 }
 

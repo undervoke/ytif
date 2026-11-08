@@ -44,7 +44,6 @@ func ParseKey(s string) (Key, error) {
 
 // Gate names.
 const (
-	GateCheck  = "check"
 	GateCommit = "commit"
 	GatePush   = "push"
 	GateCI     = "ci"
@@ -52,7 +51,7 @@ const (
 
 func ValidGate(name string) bool {
 	switch name {
-	case GateCheck, GateCommit, GatePush, GateCI:
+	case GateCommit, GatePush, GateCI:
 		return true
 	}
 	return false

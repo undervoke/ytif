@@ -1,11 +1,11 @@
 version: 3
 gate:
-  check: {scope: file}
   commit: {scope: file}
   push: {scope: full}
   ci: {scope: full}
+guard:
+  limit: 2m
 verifications:
   - runner: command
     name: documentation
     run: [dinyd, check, --worktree]
-    check: true

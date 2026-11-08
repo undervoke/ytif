@@ -35,11 +35,8 @@ func DefaultPath(commonDir string) string {
 	return filepath.Join(commonDir, "ytif", "board.html")
 }
 
-// GateCheck aliases the agent-invocable gate name for board display order.
-const GateCheck = check.GateCheck
-
 // gateOrder is the display order for gates.
-var gateOrder = []string{check.GateCheck, check.GateCommit, check.GatePush, check.GateCI}
+var gateOrder = []string{check.GateCommit, check.GatePush, check.GateCI}
 
 // Sources are the records and the branch the page shows: the local record
 // lines, the CI lines read from the artifact cache, the checked-out branch,
@@ -118,7 +115,6 @@ type verificationOut struct {
 	Runner     string             `json:"runner"`
 	Unit       string             `json:"unit"`
 	Name       string             `json:"name"`
-	Check      bool               `json:"check"`
 	Commit     bool               `json:"commit"`
 	SkipPush   bool               `json:"skip_push"`
 	Gates      []string           `json:"gates"` // member gates in gateOrder
@@ -245,6 +241,7 @@ type boardData struct {
 func build(repo string, inv inventory.Inventory, src Sources, now time.Time) boardData {
 	settings := inv.Board.Settings()
 	local := withoutGate(src.Local, check.GateCI)
+	local = withoutGate(local, "check")
 	remote := onlyGate(src.Remote, check.GateCI)
 	lines := append(append([]record.Line(nil), local...), remote...)
 	sort.SliceStable(lines, func(i, j int) bool { return lines[i].Time.Before(lines[j].Time) })
@@ -301,7 +298,7 @@ func build(repo string, inv inventory.Inventory, src Sources, now time.Time) boa
 		}
 		d.Verifications = append(d.Verifications, verificationOut{
 			Key: k, Runner: e.Runner, Unit: e.Key().Unit, Name: e.Name,
-			Check: e.Check, Commit: e.Commit, SkipPush: e.SkipPush, Gates: gates,
+			Commit: e.Commit, SkipPush: e.SkipPush, Gates: gates,
 			IsCommand: e.Runner == inventory.CommandRunner,
 			Run:       append([]string(nil), e.Run...),
 			Cwd:       e.Cwd, Exclusive: append([]string(nil), e.Exclusive...),

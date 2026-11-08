@@ -7,6 +7,16 @@ module proxy may already have cached that version.
 
 ## [Unreleased]
 
+### Added
+
+- Agent-guard duration rule: recognized verification commands are priced from local record elapsed time and refused only when the estimate exceeds `guard.limit` (default 2m). Whole-command elapsed applies first, undivided; otherwise `max(longest, sum/workers)` over identified verifications. Unknown stays allowed. `ytif init` writes a missing `guard:` and `ytif migrate` adds it to migrated ledgers.
+- The guard reads a bounded recent portion of local timing records without waiting for record maintenance.
+
+### Changed
+
+- **Breaking:** `ytif check` was removed. Run `commit`, `push`, or `ci` instead; `gate.check`, `check: true`, and `scope.check` are rejected by strict decoding, `ytif init` removes them from the root and its included fragments and fills a missing `guard: {limit: 2m}`, `ytif migrate` outputs no check fields and includes `guard:`, and the board excludes `check` records from its statistics and display.
+- The agent guard no longer refuses verification categories outright; it refuses only estimates above the guard limit and records the estimate basis with the refusal.
+
 ## [0.15.0] - 2026-11-03
 
 ### Added

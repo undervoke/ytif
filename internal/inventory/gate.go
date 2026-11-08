@@ -30,7 +30,7 @@ type CIScope struct {
 	Profiles map[string]CIProfile `yaml:"profiles,omitempty"`
 }
 
-// GateScope is the policy for check or commit.
+// GateScope is the policy for commit.
 type GateScope struct {
 	Scope check.TargetScope `yaml:"scope"`
 }
@@ -43,7 +43,6 @@ type PushScope struct {
 
 // GateConfig is the mandatory root gate. Fragments must not declare it.
 type GateConfig struct {
-	Check  GateScope `yaml:"check"`
 	Commit GateScope `yaml:"commit"`
 	Push   PushScope `yaml:"push"`
 	CI     CIScope   `yaml:"ci"`
@@ -59,7 +58,7 @@ type GateContext struct {
 }
 
 // requireGateScope rejects a missing or mistyped gate scope with the init
-// hint shared by the check, commit and ci gates.
+// hint shared by the commit and ci gates.
 func requireGateScope(display, field string, s check.TargetScope) error {
 	if s == "" {
 		return fmt.Errorf("%s: %s: set scope to file, affected or full; run ytif init to fill missing gate defaults", display, field)
@@ -92,9 +91,6 @@ func (g GateConfig) profileScope(name string) (scope check.TargetScope, from str
 }
 
 func (g GateConfig) validate(display string) error {
-	if err := requireGateScope(display, "gate.check.scope", g.Check.Scope); err != nil {
-		return err
-	}
 	if err := requireGateScope(display, "gate.commit.scope", g.Commit.Scope); err != nil {
 		return err
 	}
@@ -163,11 +159,11 @@ func validateEntryScopes(entries []Entry, gate GateConfig, display string) error
 				return fmt.Errorf("%s: scope.%s %q: want file, affected or full", loc, k, string(v))
 			}
 			switch k {
-			case check.GateCheck, check.GateCommit, check.GatePush, check.GateCI:
+			case check.GateCommit, check.GatePush, check.GateCI:
 			default:
 				name, ok := strings.CutPrefix(k, check.GateCI+"/")
 				if !ok || name == "" {
-					return fmt.Errorf("%s: scope.%q: unknown scope, want check, commit, push, ci or ci/<profile>", loc, k)
+					return fmt.Errorf("%s: scope.%q: unknown scope, want commit, push, ci or ci/<profile>", loc, k)
 				}
 				if !profiles[name] {
 					if len(profiles) == 0 {
@@ -189,15 +185,11 @@ func validateEntryScopes(entries []Entry, gate GateConfig, display string) error
 // Context resolves the gate-level policy. Only ci takes a profile.
 func (g GateConfig) Context(gate, profile string) (GateContext, error) {
 	switch gate {
-	case check.GateCheck, check.GateCommit:
+	case check.GateCommit:
 		if profile != "" {
 			return GateContext{}, fmt.Errorf("gate %s does not take a profile; only ci takes --profile", gate)
 		}
-		scope := g.Check.Scope
-		if gate == check.GateCommit {
-			scope = g.Commit.Scope
-		}
-		return GateContext{Scope: scope, from: "gate"}, nil
+		return GateContext{Scope: g.Commit.Scope, from: "gate"}, nil
 	case check.GatePush:
 		if profile != "" {
 			return GateContext{}, fmt.Errorf("gate push does not take a profile; it runs its gate.push ci-profile mapping")
