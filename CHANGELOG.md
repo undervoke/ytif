@@ -11,6 +11,7 @@ module proxy may already have cached that version.
 
 - Agent-guard duration rule: recognized verification commands are priced from local record elapsed time and refused only when the estimate exceeds `guard.limit` (default 2m). Whole-command elapsed applies first, undivided; otherwise `max(longest, sum/workers)` over identified verifications. Unknown stays allowed. `ytif init` writes a missing `guard:` and `ytif migrate` adds it to migrated ledgers.
 - The guard reads a bounded recent portion of local timing records without waiting for record maintenance.
+- `nx-target` runner: Nx targets marked `metadata.ytif` are discovered from the resolved project graph and run as one verdict per project and target, placed by project root for gate scope and held to the usual contract. Enroll with `nx-targets: true` at the root of the ledger; without it, discovery never reads the project graph for this runner.
 
 ### Changed
 

@@ -49,8 +49,9 @@ a finding; the gates fail until none remain.
 
 ## Verifications
 
-Tests and verify functions are discovered from Git-tracked files; direct
-commands are registered in the ledger. A key is `runner:unit:name`:
+Tests and verify functions are discovered from Git-tracked files, marked Nx
+targets from the project graph; direct commands are registered in the ledger.
+A key is `runner:unit:name`:
 
 | Runner | Discovered from | Unit | Name |
 |---|---|---|---|
@@ -61,6 +62,7 @@ commands are registered in the ledger. A key is `runner:unit:name`:
 | `dotnet-test` | `.csproj` referencing `Microsoft.NET.Test.Sdk` | `.csproj` path | method |
 | `vitest-test` | `vitest list` of each `vitest.config.*`, or a `vite.config.*` that mentions vitest | test file | `suite > test` |
 | `playwright-test` | `playwright test --list` of each `playwright.config.*` | spec file | `describe > test` |
+| `nx-target` | Nx targets marked `metadata.ytif` in the resolved project graph | project root | target |
 | `command` | ledger `run` argv | `cwd` or `.` | entry `name` |
 
 Verify functions write findings as `path:line: message` and fail by returning
@@ -86,6 +88,43 @@ prepare:
   - runners: [vitest-test]
     run: [pnpm, exec, nx, run-many, -t, prepare]
 ```
+
+A project's judgment that is an Nx target rather than a test suite joins through
+`nx-target`. Set `nx-targets: true` at the root of the ledger, mark the target,
+and declare one entry per project and target with the usual contract:
+
+```json
+"logging:scan": { "metadata": { "ytif": true }, "command": "semgrep scan {projectRoot}" }
+```
+
+```yaml
+nx-targets: true
+verifications:
+  - runner: nx-target
+    unit: apps/api
+    name: logging:scan
+    tags: [...]
+    accident: ...
+    detection: ...
+    impact: ...
+    delete_when: ...
+```
+
+The marker declares a verification; membership and the contract stay in the
+ledger. Plugin-inferred targets can carry it too. The setting is read from the
+root file only. With it, an entry without a marked target is stale, a marked
+target without an entry is unregistered, and a project graph that cannot be read
+is a discovery failure. Without it, discovery never reads the project graph for
+this runner, and an `nx-target` entry is an unknown runner.
+
+Affected scope trusts the entry's project, so a target should read what that
+project owns. ytif runs the exact project and target with `nx run` from the
+repository root and records one verdict for it; the dependencies and cache
+behind that invocation are Nx's. A dependency that is itself a ledger entry runs
+regardless of that entry's gate membership and gets no verdict of its own.
+Selected targets run one at a time, while other runners run alongside them.
+The agent guard uses a target's own recorded verdict timing first; without it,
+only an uncached target's statically resolved single-command body can be priced.
 
 ## The ledger
 

@@ -17,6 +17,7 @@ import (
 	"github.com/undervoke/ytif/internal/inventory"
 	"github.com/undervoke/ytif/internal/proc"
 	"github.com/undervoke/ytif/internal/reconcile"
+	"github.com/undervoke/ytif/internal/runner/nxtarget"
 )
 
 // ConfigChecker reconciles gate configuration (lefthook, CI) with the rail.
@@ -77,6 +78,9 @@ func loadSurvey(ctx context.Context, root string, sources []check.Source, config
 		return nil, err
 	}
 	sources = append(append([]check.Source(nil), sources...), checkrun.NewSource(inv.Verifications, jobs))
+	if inv.NxTargets {
+		sources = append(sources, &nxtarget.Source{})
+	}
 	s := &Survey{
 		Repo:       check.Repo{Root: root, Tracked: tracked, Scratch: scratch, Log: log},
 		Inventory:  inv,

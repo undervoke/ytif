@@ -1,7 +1,7 @@
-// Package affected reports which checks a change cannot affect, from a
-// dependency graph the repository already maintains. Nx is the only graph
-// source. A unit the graph does not place in a project is never reported
-// unaffected.
+// Package affected reads the dependency graph the repository already
+// maintains and reports which checks a change cannot affect. Nx is the only
+// graph source. A unit the graph does not place in a project is never
+// reported unaffected.
 package affected
 
 import (
@@ -64,54 +64,20 @@ func NxFiles(ctx context.Context, repo check.Repo, changed []string) (*Graph, st
 	if !slices.Contains(repo.Tracked, "nx.json") {
 		return nil, "no nx.json at the repository root", nil, nil
 	}
-	bin, err := nodetool.Bin(repo.Root, ".", "nx")
+	nx, err := newNxSession(repo, "affected")
 	if err != nil {
 		return nil, "", nil, err
 	}
-	var invs []check.Invocation
-	nx := func(label string, args ...string) ([]byte, error) {
-		cmd := exec.CommandContext(ctx, bin, args...)
-		cmd.Dir = repo.Root
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout, cmd.Stderr = &stdout, &stderr
-		elapsed, err := proc.Run(ctx, cmd)
-		if err != nil {
-			err = fmt.Errorf("nx %s: %w\n%s", label, err, strings.TrimSpace(stderr.String()))
-		}
-		// The gate reports the fallback, so this invocation records only cost.
-		invs = append(invs, check.Invocation{Runner: "nx", Unit: label, What: "affected",
-			Elapsed: elapsed, Interrupted: errors.Is(err, proc.ErrInterrupted)})
-		return stdout.Bytes(), err
-	}
-
-	file := filepath.Join(repo.Scratch, "nx-graph.json")
-	if _, err := nx("graph", "graph", "--file="+file); err != nil {
-		return nil, "", invs, err
-	}
-	data, err := os.ReadFile(file)
+	projects, err := nx.projects(ctx, "nx-graph.json")
 	if err != nil {
-		return nil, "", invs, err
-	}
-	var doc struct {
-		Graph struct {
-			Nodes map[string]struct {
-				Data struct{ Root string }
-			}
-		}
-	}
-	if err := json.Unmarshal(data, &doc); err != nil {
-		return nil, "", invs, fmt.Errorf("nx graph: %w", err)
+		return nil, "", nx.invs, err
 	}
 	g := &Graph{roots: map[string]string{}, affected: map[string]bool{}}
-	for name, n := range doc.Graph.Nodes {
-		root := path.Clean(filepath.ToSlash(n.Data.Root))
-		if root == "." {
-			root = ""
-		}
-		g.roots[name] = root
+	for _, p := range projects {
+		g.roots[p.Name] = p.Root
 	}
 	if len(changed) == 0 {
-		return g, "", invs, nil
+		return g, "", nx.invs, nil
 	}
 	seen := map[string]bool{}
 	var files []string
@@ -121,27 +87,115 @@ func NxFiles(ctx context.Context, repo check.Repo, changed []string) (*Graph, st
 		}
 		seen[f] = true
 		if strings.Contains(f, ",") || (strings.HasPrefix(f, `"`) && strings.HasSuffix(f, `"`)) {
-			return nil, "", invs, fmt.Errorf("nx --files: path %q cannot be represented unambiguously", f)
+			return nil, "", nx.invs, fmt.Errorf("nx --files: path %q cannot be represented unambiguously", f)
 		}
 		files = append(files, f)
 	}
 	if len(files) == 0 {
-		return g, "", invs, nil
+		return g, "", nx.invs, nil
 	}
 	sort.Strings(files)
 	joined := strings.Join(files, ",")
-	out, err := nx("show projects", "show", "projects", "--affected", "--files="+joined, "--json")
+	out, err := nx.run(ctx, "show projects", "show", "projects", "--affected", "--files="+joined, "--json")
 	if err != nil {
-		return nil, "", invs, err
+		return nil, "", nx.invs, err
 	}
 	var names []string
 	if err := json.Unmarshal(lastLine(out), &names); err != nil {
-		return nil, "", invs, fmt.Errorf("nx show projects: %w", err)
+		return nil, "", nx.invs, fmt.Errorf("nx show projects: %w", err)
 	}
 	for _, n := range names {
 		g.affected[n] = true
 	}
-	return g, "", invs, nil
+	return g, "", nx.invs, nil
+}
+
+// Project is one node of the resolved Nx project graph.
+type Project struct {
+	Name    string
+	Root    string                     // slash path, "" for the repository root
+	Targets map[string]json.RawMessage // by exact target name
+}
+
+// Projects reads the project graph as Nx resolves it, plugin-inferred targets
+// included. A repository without nx.json has no graph, which is an error here
+// because only a repository that asked for the graph calls this.
+func Projects(ctx context.Context, repo check.Repo) ([]Project, []check.Invocation, error) {
+	if !slices.Contains(repo.Tracked, "nx.json") {
+		return nil, nil, errors.New("no nx.json at the repository root")
+	}
+	nx, err := newNxSession(repo, "list")
+	if err != nil {
+		return nil, nil, err
+	}
+	projects, err := nx.projects(ctx, "nx-targets-graph.json")
+	return projects, nx.invs, err
+}
+
+// nxSession runs nx at the repository root and keeps each call's cost, which
+// it records under what.
+type nxSession struct {
+	repo check.Repo
+	bin  string
+	what string
+	invs []check.Invocation
+}
+
+func newNxSession(repo check.Repo, what string) (*nxSession, error) {
+	bin, err := nodetool.Bin(repo.Root, ".", "nx")
+	if err != nil {
+		return nil, err
+	}
+	return &nxSession{repo: repo, bin: bin, what: what}, nil
+}
+
+func (s *nxSession) run(ctx context.Context, label string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, s.bin, args...)
+	cmd.Dir = s.repo.Root
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	elapsed, err := proc.Run(ctx, cmd)
+	if err != nil {
+		err = fmt.Errorf("nx %s: %w\n%s", label, err, strings.TrimSpace(stderr.String()))
+	}
+	// The caller reports a failure, so this invocation records only cost.
+	s.invs = append(s.invs, check.Invocation{Runner: "nx", Unit: label, What: s.what,
+		Elapsed: elapsed, Interrupted: errors.Is(err, proc.ErrInterrupted)})
+	return stdout.Bytes(), err
+}
+
+// projects writes the graph to name in the scratch directory and reads it.
+func (s *nxSession) projects(ctx context.Context, name string) ([]Project, error) {
+	file := filepath.Join(s.repo.Scratch, name)
+	if _, err := s.run(ctx, "graph", "graph", "--file="+file); err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+	var doc struct {
+		Graph struct {
+			Nodes map[string]struct {
+				Data struct {
+					Root    string
+					Targets map[string]json.RawMessage
+				}
+			}
+		}
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("nx graph: %w", err)
+	}
+	projects := make([]Project, 0, len(doc.Graph.Nodes))
+	for name, n := range doc.Graph.Nodes {
+		root := path.Clean(filepath.ToSlash(n.Data.Root))
+		if root == "." {
+			root = ""
+		}
+		projects = append(projects, Project{Name: name, Root: root, Targets: n.Data.Targets})
+	}
+	return projects, nil
 }
 
 // lastLine returns the last nonblank line, where nx prints its JSON after

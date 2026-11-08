@@ -36,11 +36,16 @@ const (
 	// CommandRunner is the runner name for project-owned direct commands
 	// folded into the verification list.
 	CommandRunner = "command"
+	// NxTargetRunner is the runner name for Nx targets marked as verifications.
+	NxTargetRunner = "nx-target"
 )
 
 // Inventory is the verification ledger: shared configuration from the root
-// file plus the merged verification list. Guard carries the root-only
-// agent-guard duration limit.
+// file plus the merged verification list. NxTargets enrolls the nx-target
+// runner. Only the root file carries it, so losing a fragment cannot switch
+// off the discovery that reports the loss.
+// Guard carries the agent-guard duration limit. Only the root file carries
+// it, like NxTargets.
 type Inventory struct {
 	Version       int          `yaml:"version"`
 	Gate          GateConfig   `yaml:"gate"`
@@ -48,6 +53,7 @@ type Inventory struct {
 	Prepare       []Prep       `yaml:"prepare,omitempty"`
 	Board         BoardConfig  `yaml:"board,omitempty"`
 	Guard         GuardConfig  `yaml:"guard,omitempty"`
+	NxTargets     bool         `yaml:"nx-targets,omitempty"`
 	Includes      []string     `yaml:"includes,omitempty"`
 	Verifications []Entry      `yaml:"verifications"`
 	Files         []LedgerFile `yaml:"-"`
@@ -390,7 +396,7 @@ const (
 
 // fragmentFile is one included ledger fragment. Only includes and
 // verifications may appear here; strict decoding rejects the root-only
-// version, vocabulary, prepare, board, guard and gate fields.
+// version, vocabulary, prepare, board, guard, gate and nx-targets fields.
 type fragmentFile struct {
 	Includes      []string `yaml:"includes,omitempty"`
 	Verifications []Entry  `yaml:"verifications"`

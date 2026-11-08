@@ -52,3 +52,12 @@ The changes a gate compares choose targets; every verification still reads the c
 
 When comparison is needed, push fetches its profile's target once into a ytif-owned ref, so the comparison does not depend on when the user last fetched.
 When pushed tips differ from the working tree, narrowed verifications run full, because the result describes the working tree rather than those tips. <!-- dinyd: internal/gate/plans.go#resolvePlans s1:bf96ec39f703fdb6 -->
+
+## nx targets
+
+Nx owns project actions and the graph; ytif owns membership, selection, and records.
+A target becomes a verification only through an explicit marker, because a target can be any action, including build and serve.
+The key's unit is the project root, so a path stays the only ownership evidence and `cwd` stays an execution detail.
+Enrollment sits at the root of the ledger rather than following the entry list, because discovery must not depend on the entries it audits.
+Enrollment is explicit because discovery fails the gate when the graph cannot be read, and a repository that never adopted the runner must not take on that dependency.
+One target invocation is one verdict; ytif infers nothing about the tasks Nx runs behind it.
