@@ -7,6 +7,8 @@ module proxy may already have cached that version.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-09
+
 ### Added
 
 - Agent-guard duration rule: recognized verification commands are priced from local record elapsed time and refused only when the estimate exceeds `guard.limit` (default 2m). Whole-command elapsed applies first, undivided; otherwise `max(longest, sum/workers)` over identified verifications. Unknown stays allowed. `ytif init` writes a missing `guard:` and `ytif migrate` adds it to migrated ledgers.
@@ -253,7 +255,8 @@ Existing `version: 2` inventories remain compatible. `commands:` is optional and
 
 - Checks run without the hook repository's git environment variables.
 
-[Unreleased]: https://github.com/undervoke/ytif/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/undervoke/ytif/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/undervoke/ytif/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/undervoke/ytif/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/undervoke/ytif/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/undervoke/ytif/compare/v0.13.0...v0.13.1

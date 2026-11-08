@@ -13,10 +13,10 @@ without a stated reason fail the gate.
 ## Install
 
 Pin ytif per project, so hooks, CI, and every clone run the same version
-(Go 1.24 or later):
+(Go 1.25 or later):
 
 ```sh
-go get -tool github.com/undervoke/ytif/cmd/ytif@v0.15.0
+go get -tool github.com/undervoke/ytif/cmd/ytif@v0.16.0
 ```
 
 Read every `ytif` below as `go tool ytif`. Outside a Go module, download a
@@ -28,6 +28,11 @@ keep recording.
 To upgrade a project whose ledger is a version 2 `ytif-inventory.yaml`, raise
 the pin and run `ytif migrate`. It lists the verifications that now also run
 at push; add `skip-push: true` where push must not run them.
+
+When upgrading from v0.15.0, run `ytif init` after raising the pin, using the
+same host selection as before. It removes the retired `check` settings from
+the root ledger and its includes and adds the default two-minute guard limit.
+Existing `check` settings must be migrated before the new gates can load them.
 
 ## Adopt
 
