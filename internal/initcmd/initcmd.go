@@ -798,25 +798,24 @@ func removeMappingKey(m *yaml.Node, key string) bool {
 	return false
 }
 
+func entryHasCheck(entry *yaml.Node) bool {
+	return lookup(entry, "check") != nil || lookup(lookup(entry, "scope"), "check") != nil
+}
+
 func stripEntryCheck(entry *yaml.Node) (bool, error) {
-	if entry == nil || entry.Kind != yaml.MappingNode {
+	if !entryHasCheck(entry) {
 		return false, nil
 	}
 	if err := editable(entry, "verifications"); err != nil {
 		return false, err
 	}
-	dirty := false
-	if removeMappingKey(entry, "check") {
-		dirty = true
-	}
-	if scope := lookup(entry, "scope"); scope != nil {
-		if scope.Kind == yaml.MappingNode {
-			if err := editable(scope, "scope"); err != nil {
-				return false, err
-			}
-			if removeMappingKey(scope, "check") {
-				dirty = true
-			}
+	dirty := removeMappingKey(entry, "check")
+	if scope := lookup(entry, "scope"); lookup(scope, "check") != nil {
+		if err := editable(scope, "scope"); err != nil {
+			return false, err
+		}
+		if removeMappingKey(scope, "check") {
+			dirty = true
 			if len(scope.Content) == 0 {
 				removeMappingKey(entry, "scope")
 			}
@@ -830,11 +829,13 @@ func stripVerifications(top *yaml.Node) (bool, error) {
 	if seq == nil || seq.Kind != yaml.SequenceNode {
 		return false, nil
 	}
-	if err := editable(seq, "verifications"); err != nil {
-		return false, err
-	}
 	dirty := false
 	for _, e := range seq.Content {
+		if !dirty && entryHasCheck(e) {
+			if err := editable(seq, "verifications"); err != nil {
+				return false, err
+			}
+		}
 		d, err := stripEntryCheck(e)
 		if err != nil {
 			return false, err

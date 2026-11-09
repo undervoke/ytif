@@ -180,6 +180,31 @@ unintended change it catches; `detection`, what it runs so that the accident
 fails it; `impact`, what users see when that change ships; and `delete_when`,
 an observable condition for removing it. `command` entries carry no contract.
 
+YAML merge keys can share a contract while each unit remains explicitly registered:
+
+```yaml
+verifications:
+  - <<: &logging-scan
+      runner: nx-target
+      name: logging:scan
+      tags: [user, mistake, misdirection, silent, manual]
+      accident: A new logging call bypasses the project's structured logger.
+      detection: Scans for logging calls outside the approved logger.
+      impact: Diagnostic events lose the context needed to investigate failures.
+      delete_when: The project no longer requires structured logging.
+    unit: apps/api
+    commit: true
+    scope: {ci: affected}
+  - <<: *logging-scan
+    unit: apps/api.seed
+```
+
+Anchors are local to one YAML file. Setting `tags` or `scope` on a member replaces
+that whole inherited value; it does not extend it. Keep per-member `unit`,
+`commit`, and `scope` outside the shared mapping. `ytif init` leaves these
+merge-keyed verification entries intact when they have no retired `check` fields
+to remove.
+
 Tags describe the accident. Every discovered verification carries exactly one
 `visibility` and one `recovery` tag, and any number of the rest:
 

@@ -7,6 +7,10 @@ module proxy may already have cached that version.
 
 ## [Unreleased]
 
+### Fixed
+
+- `ytif init` accepts verification entries that use YAML anchors and merge keys when it has no retired `check` fields to remove from them.
+
 ## [0.16.0] - 2026-11-09
 
 ### Added
