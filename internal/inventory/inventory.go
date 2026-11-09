@@ -812,7 +812,8 @@ func Migrate(root string, out io.Writer) error {
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	if _, err := decodeLegacy(oldData); err != nil {
+	old, err := decodeLegacy(oldData)
+	if err != nil {
 		return err
 	}
 	var doc yaml.Node
@@ -827,7 +828,7 @@ func Migrate(root string, out io.Writer) error {
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		return fmt.Errorf("%s: want exactly one YAML document", LegacyInventoryFile)
 	}
-	counts, err := transformLegacy(&doc)
+	counts, err := transformLegacy(&doc, old.Checks)
 	if err != nil {
 		return err
 	}
@@ -843,7 +844,7 @@ func Migrate(root string, out io.Writer) error {
 	pdec := yaml.NewDecoder(bytes.NewReader(buf.Bytes()))
 	pdec.KnownFields(true)
 	if err := pdec.Decode(&pre); err != nil {
-		return fmt.Errorf("migrated output failed to load: %w", err)
+		return fmt.Errorf("migrated output failed to load: %w; expand YAML merges and aliases in %s and retry", err, LegacyInventoryFile)
 	}
 	if pre.Version != inventoryVersion {
 		return fmt.Errorf("migrated output has version %d, want %d", pre.Version, inventoryVersion)
@@ -913,7 +914,7 @@ type migrateCounts struct {
 
 // transformLegacy rewrites a legacy version-2 document tree in place into
 // the version-3 shape, preserving comments and unrelated content.
-func transformLegacy(doc *yaml.Node) (migrateCounts, error) {
+func transformLegacy(doc *yaml.Node, checks []legacyEntry) (migrateCounts, error) {
 	var counts migrateCounts
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) != 1 {
 		return counts, fmt.Errorf("%s: want a mapping", LegacyInventoryFile)
@@ -952,7 +953,7 @@ func transformLegacy(doc *yaml.Node) (migrateCounts, error) {
 		}
 	}
 	if checksVal != nil {
-		if err := transformLegacyChecks(checksVal, &counts); err != nil {
+		if err := transformLegacyChecks(checksVal, checks, &counts); err != nil {
 			return counts, err
 		}
 		checksKey.Value = "verifications"
@@ -1046,8 +1047,9 @@ func insertLegacyGate(top *yaml.Node) {
 
 // transformLegacyChecks converts each legacy check entry's placement into
 // the new membership booleans: commit becomes commit: true, push and ci
-// become the push-and-CI default.
-func transformLegacyChecks(seq *yaml.Node, counts *migrateCounts) error {
+// become the push-and-CI default. Entries retain the resolved values from
+// before any anchor donors were rewritten.
+func transformLegacyChecks(seq *yaml.Node, entries []legacyEntry, counts *migrateCounts) error {
 	if isNull(seq) {
 		return nil
 	}
@@ -1058,41 +1060,42 @@ func transformLegacyChecks(seq *yaml.Node, counts *migrateCounts) error {
 		if item.Kind != yaml.MappingNode {
 			return fmt.Errorf("%s: checks[%d]: want a mapping", LegacyInventoryFile, n)
 		}
-		runner, unit, name, placement := "", "", "", ""
+		e := entries[n]
 		placeIdx := -1
+		merged := false
 		for i := 0; i+1 < len(item.Content); i += 2 {
 			switch item.Content[i].Value {
-			case "runner":
-				runner = item.Content[i+1].Value
-			case "unit":
-				unit = item.Content[i+1].Value
-			case "name":
-				name = item.Content[i+1].Value
+			case "<<":
+				merged = true
 			case "placement":
-				placement = item.Content[i+1].Value
 				placeIdx = i
 			}
 		}
-		if strings.TrimSpace(runner) == "" || strings.TrimSpace(name) == "" {
+		if strings.TrimSpace(e.Runner) == "" || strings.TrimSpace(e.Name) == "" {
 			return fmt.Errorf("%s: checks[%d]: set runner and name", LegacyInventoryFile, n)
 		}
 		if placeIdx < 0 {
 			return fmt.Errorf("%s: checks[%d]: set placement to commit, push or ci", LegacyInventoryFile, n)
 		}
-		switch placement {
+		switch e.Placement {
 		case "commit":
 			item.Content[placeIdx].Value = "commit"
 			item.Content[placeIdx+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "true"}
 			counts.commit++
-		case "push":
-			item.Content = append(item.Content[:placeIdx], item.Content[placeIdx+2:]...)
+		case "push", "ci":
+			if merged {
+				// Removing placement alone would expose a donor's migrated commit value.
+				item.Content[placeIdx].Value = "commit"
+				item.Content[placeIdx+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "false"}
+			} else {
+				item.Content = append(item.Content[:placeIdx], item.Content[placeIdx+2:]...)
+			}
 			counts.preset++
-		case "ci":
-			item.Content = append(item.Content[:placeIdx], item.Content[placeIdx+2:]...)
-			counts.preset++
-			counts.gainedPush = append(counts.gainedPush, check.Key{Runner: runner, Unit: unit, Name: name}.String())
+			if e.Placement == "ci" {
+				counts.gainedPush = append(counts.gainedPush, check.Key{Runner: e.Runner, Unit: e.Unit, Name: e.Name}.String())
+			}
 		default:
-			return fmt.Errorf("%s: checks[%d]: placement %q: want commit, push or ci", LegacyInventoryFile, n, placement)
+			return fmt.Errorf("%s: checks[%d]: placement %q: want commit, push or ci", LegacyInventoryFile, n, e.Placement)
 		}
 	}
 	return nil

@@ -10,6 +10,7 @@ module proxy may already have cached that version.
 ### Fixed
 
 - `ytif init` accepts verification entries that use YAML anchors and merge keys when it has no retired `check` fields to remove from them.
+- `ytif migrate` keeps each legacy check's own placement when YAML merges or aliases are involved: a merged push or CI check no longer inherits a donor's `commit: true`, and an aliased placement is read by its value.
 
 ## [0.16.0] - 2026-11-09
 
