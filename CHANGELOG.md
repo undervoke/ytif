@@ -7,6 +7,8 @@ module proxy may already have cached that version.
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-11-09
+
 ### Fixed
 
 - `ytif init` accepts verification entries that use YAML anchors and merge keys when it has no retired `check` fields to remove from them.
@@ -260,7 +262,8 @@ Existing `version: 2` inventories remain compatible. `commands:` is optional and
 
 - Checks run without the hook repository's git environment variables.
 
-[Unreleased]: https://github.com/undervoke/ytif/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/undervoke/ytif/compare/v0.16.1...HEAD
+[0.16.1]: https://github.com/undervoke/ytif/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/undervoke/ytif/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/undervoke/ytif/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/undervoke/ytif/compare/v0.13.1...v0.14.0
