@@ -7,6 +7,10 @@ module proxy may already have cached that version.
 
 ## [Unreleased]
 
+### Changed
+
+- `affected` scope selects `nx-target` entries by their own task: ytif asks Nx once per target name, so with task-granular affected (Nx 24 unless `affected.legacy` is set) a target whose inputs did not change is skipped even when its project is affected. Legacy Nx keeps project selection. A target the graph no longer has, or whose name Nx cannot receive verbatim, runs full; names that `nx run` aliases (`b`, `e`, `l`, `s`, `t`) keep project selection.
+
 ## [0.16.1] - 2026-11-09
 
 ### Fixed

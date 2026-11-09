@@ -66,6 +66,13 @@ func (s *Source) Discover(ctx context.Context, repo check.Repo) ([]check.Key, []
 	return keys, invs, nil
 }
 
+// runAliases are the target names `nx run` rewrites before resolving them.
+var runAliases = map[string]bool{"b": true, "e": true, "l": true, "s": true, "t": true}
+
+// ExactDispatch reports whether Run executes the target named target rather
+// than one `nx run` substitutes for it.
+func ExactDispatch(target string) bool { return !runAliases[target] }
+
 func marked(target json.RawMessage) bool {
 	var t struct {
 		Metadata struct {

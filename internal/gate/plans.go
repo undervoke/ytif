@@ -9,6 +9,7 @@ import (
 	"github.com/undervoke/ytif/internal/check"
 	"github.com/undervoke/ytif/internal/gitx"
 	"github.com/undervoke/ytif/internal/inventory"
+	"github.com/undervoke/ytif/internal/runner/nxtarget"
 	"github.com/undervoke/ytif/internal/targeting"
 )
 
@@ -89,7 +90,7 @@ func resolvePlans(ctx context.Context, s *Survey, in *check.Input, snap gitx.Sna
 				if !graphRead {
 					var invs []check.Invocation
 					var err error
-					graph, graphReason, invs, err = affected.NxFiles(ctx, s.Repo, snap.Changed)
+					graph, graphReason, invs, err = affected.NxFiles(ctx, s.Repo, snap.Changed, taskTargets(s, in.Plans))
 					s.Listing = append(s.Listing, invs...)
 					if err != nil {
 						graphReason = err.Error()
@@ -98,6 +99,20 @@ func resolvePlans(ctx context.Context, s *Survey, in *check.Input, snap gitx.Sna
 				}
 				if graph == nil {
 					fullPlan(p, "affected-unavailable: "+graphReason)
+				} else if taskNarrowed(e) {
+					// The entry runs exactly this task, so Nx's task answer
+					// replaces the project answer, which can miss a task
+					// reading files outside its project.
+					hit, known := graph.Task(e.Key().Unit, e.Name)
+					if !known {
+						fullPlan(p, "affected-target-unmapped")
+					} else {
+						p.Offered, p.Targets = "nx-tasks", 1
+						p.Changed = append([]string{}, snap.Changed...)
+						if !hit {
+							p.Run, p.Reason, p.Targets = false, "unaffected-target", 0
+						}
+					}
 				} else if _, found := graph.Project(e.Key().Unit); !found {
 					fullPlan(p, "affected-domain-unmapped")
 				} else {
@@ -111,13 +126,31 @@ func resolvePlans(ctx context.Context, s *Survey, in *check.Input, snap gitx.Sna
 		}
 		// Offered names the actual inputs a legacy runner receives: the gate
 		// file list for full runs. Narrowed runs keep the targeting the
-		// resolver set above (native-targets or nx-units); Changed stays the
+		// resolver set above (native-targets, nx-units or nx-tasks); Changed stays the
 		// comparison context, not a proof of file targeting.
 		if p.Run && (e.Runner == "node-verify" || e.Runner == "go-verify") && p.Resolved == check.ScopeFull {
 			p.Offered = "legacy-files:" + in.Scope
 			p.Targets = len(in.Files)
 		}
 	}
+}
+
+// taskNarrowed reports whether the affected scope narrows e by its own Nx
+// task. An aliased name dispatches another target, so it keeps project
+// selection.
+func taskNarrowed(e inventory.Entry) bool {
+	return e.Runner == inventory.NxTargetRunner && nxtarget.ExactDispatch(e.Name)
+}
+
+// taskTargets lists the target names whose task answers narrowed plans need.
+func taskTargets(s *Survey, plans map[check.Key]*check.Plan) []string {
+	var targets []string
+	for _, e := range s.Inventory.Verifications {
+		if p := plans[e.Key()]; p != nil && p.Run && p.Resolved != check.ScopeFull && taskNarrowed(e) {
+			targets = append(targets, e.Name)
+		}
+	}
+	return targets
 }
 
 func selectedPlans(s *Survey, plans map[check.Key]*check.Plan) []check.Key {

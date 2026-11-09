@@ -51,7 +51,7 @@ The changes a gate compares choose targets; every verification still reads the c
 | ci, pull request | Merge base of the PR base and head → PR head | The host's checkout, usually the PR merge |
 
 When comparison is needed, push fetches its profile's target once into a ytif-owned ref, so the comparison does not depend on when the user last fetched.
-When pushed tips differ from the working tree, narrowed verifications run full, because the result describes the working tree rather than those tips. <!-- dinyd: internal/gate/plans.go#resolvePlans s1:bf96ec39f703fdb6 -->
+When pushed tips differ from the working tree, narrowed verifications run full, because the result describes the working tree rather than those tips. <!-- dinyd: internal/gate/plans.go#resolvePlans s1:bd6bfcc1862b26c7 -->
 
 ## nx targets
 
@@ -61,3 +61,4 @@ The key's unit is the project root, so a path stays the only ownership evidence 
 Enrollment sits at the root of the ledger rather than following the entry list, because discovery must not depend on the entries it audits.
 Enrollment is explicit because discovery fails the gate when the graph cannot be read, and a repository that never adopted the runner must not take on that dependency.
 One target invocation is one verdict; ytif infers nothing about the tasks Nx runs behind it.
+Affected scope narrows an entry by its own task rather than its project, because the entry runs exactly that task; a target the graph lacks is unknown rather than unaffected, so the entry runs and discovery can report it stale.

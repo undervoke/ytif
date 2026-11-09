@@ -15,7 +15,7 @@ flowchart TB
   Member["Gate member"]
   Scope{"Requested scope<br/><small>Most specific setting wins</small>"}
   Files{"Can it take changed files?"}
-  Projects{"Is its project unaffected?"}
+  Projects{"Is its project unaffected?<br/><small>An Nx target asks about its own task</small>"}
   Changed["Changed files only"]
   Full["Full"]
   Skip["Skip"]

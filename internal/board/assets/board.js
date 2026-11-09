@@ -701,7 +701,7 @@ const shortOID = s => { s = String(s || ""); return s.length > 7 ? s.slice(0, 7)
 // Old records without plans show nothing.
 function planHTML(plans) {
   if (!plans || !plans.length) return "";
-  const countableOffered = o => /^(native-targets|nx-units|changed-files|legacy-files)/.test(String(o || ""));
+  const countableOffered = o => /^(native-targets|nx-units|nx-tasks|changed-files|legacy-files)/.test(String(o || ""));
   const rows = plans.map(p => {
     const head = `${esc(p.gate)} · ${esc(p.source)}${p.profile ? ` · ${esc(p.profile)}` : ""}`;
     const scope = `${esc(p.requested || "?")}→${esc(p.resolved || "?")}`;
