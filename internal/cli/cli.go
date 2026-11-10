@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,7 +37,9 @@ gates:
 
 other:
   migrate                convert the legacy inventory to ytif-verifications.yaml
-  init [--hosts LIST]     pin this ytif, wire gates, and register selected agent hosts
+  init [--hosts LIST] [--jobs N]
+                         pin this ytif, wire gates, register selected agent hosts,
+                         and set this machine's gate process limit
   list                   show verifications and reconciliation findings
   board [--out PATH]     write the verification board as one HTML file and open it
   guard [--host cursor]   agent hook: refuse long verification runs over the guard limit
@@ -55,7 +58,7 @@ gate flags:
   --profile NAME         CI policy profile (ci only)
   --head REF             comparison head for explicit CI context
   --target-branch NAME   target identity for an explicit CI comparison
-  --jobs N               bound concurrent processes (CPU count)
+  --jobs N               bound concurrent processes (git config ytif.jobs, else 4)
 `
 
 // Run executes one command and returns its exit code.
@@ -118,7 +121,7 @@ func runGate(ctx context.Context, name string, args []string, stdin io.Reader, s
 	if name == check.GateCommit || name == check.GatePush {
 		fs.BoolVar(&hook, "hook", false, "record this hook-triggered run")
 	}
-	jobs := fs.Int("jobs", gate.DefaultJobs, "run at most N processes at once")
+	jobs := fs.Int("jobs", 0, "run at most N processes at once (default: git config "+gate.JobsKey+", else "+strconv.Itoa(gate.DefaultJobs)+")")
 	base := fs.String("base", "", "comparison base (scope comes from the ledger)")
 	var profile, head, targetBranch string
 	if name == check.GateCI {
@@ -132,7 +135,7 @@ func runGate(ctx context.Context, name string, args []string, stdin io.Reader, s
 	if *report != "" && *report != "github" {
 		return usageError(stderr, fs, fmt.Sprintf("--report %q: want github", *report))
 	}
-	if *jobs < 1 {
+	if *jobs < 1 && given(fs, "jobs") {
 		return usageError(stderr, fs, fmt.Sprintf("--jobs %d: want 1 or more", *jobs))
 	}
 	root, code := repoRoot(stderr)
@@ -338,6 +341,7 @@ func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer, version s
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	hosts := fs.String("hosts", "", "comma-separated claude-code,codex,opencode,kilo,cursor,pi; none for gates only (default: prompt)")
+	jobs := fs.Int("jobs", 0, "processes gates run at once on this machine, stored as git config "+gate.JobsKey+" (default: prompt)")
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return gate.ExitPass
@@ -346,6 +350,9 @@ func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer, version s
 	}
 	if fs.NArg() != 0 {
 		return usageError(stderr, fs, "takes no positional arguments")
+	}
+	if *jobs < 1 && given(fs, "jobs") {
+		return usageError(stderr, fs, fmt.Sprintf("--jobs %d: want 1 or more", *jobs))
 	}
 	root, code := repoRoot(stderr)
 	if code != 0 {
@@ -356,7 +363,19 @@ func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer, version s
 		fmt.Fprintf(stderr, "ytif init: %v\n", err)
 		return gate.ExitUsage
 	}
-	return initcmd.Run(root, version, selected, stdout, stderr)
+	n, err := initcmd.SelectJobs(root, *jobs, stdin, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "ytif init: %v\n", err)
+		return gate.ExitUsage
+	}
+	return initcmd.Run(root, version, selected, n, stdout, stderr)
+}
+
+// given reports whether the command line set the named flag.
+func given(fs *flag.FlagSet, name string) bool {
+	set := false
+	fs.Visit(func(f *flag.Flag) { set = set || f.Name == name })
+	return set
 }
 
 func runGuard(args []string, stdin io.Reader, stdout, stderr io.Writer) int {

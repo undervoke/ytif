@@ -80,9 +80,10 @@ type file struct {
 }
 
 // Run adopts ytif in the repository at root with self, the running ytif's
-// version, for the hosts from SelectHosts, and returns the exit code. An
-// empty hosts slice installs the gates only.
-func Run(root, self string, hosts []string, stdout, stderr io.Writer) int {
+// version, for the hosts from SelectHosts and the process limit from
+// SelectJobs, and returns the exit code. An empty hosts slice installs the
+// gates only; jobs 0 leaves the process limit as configured.
+func Run(root, self string, hosts []string, jobs int, stdout, stderr io.Writer) int {
 	selected := hosts
 	if selected == nil {
 		selected = []string{}
@@ -149,6 +150,14 @@ func Run(root, self string, hosts []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "%-9s %s\n", f.status, f.path)
 	}
+	if jobs > 0 {
+		status, err := storeJobs(root, jobs)
+		if err != nil {
+			fmt.Fprintf(stderr, "ytif init: %v\n", err)
+			return gate.ExitUsage
+		}
+		fmt.Fprintf(stdout, "%-9s git config %s %d\n", status, gate.JobsKey, jobs)
+	}
 	if !lefthookInstalled(root) {
 		fmt.Fprintln(stdout, "\nnote: the git hooks do not run lefthook; run `lefthook install` so commit and push start the gates")
 	}
@@ -201,6 +210,47 @@ func SelectHosts(root, spec string, stdin io.Reader, stderr io.Writer) ([]string
 		return defaults, nil
 	}
 	return parseHostSpec(line)
+}
+
+// SelectJobs resolves the process limit init stores for this machine. A
+// positive n is used as given; otherwise a real terminal is prompted, and
+// Enter, or no terminal, leaves the configuration as it is (0). It never
+// writes.
+func SelectJobs(root string, n int, stdin io.Reader, stderr io.Writer) (int, error) {
+	if n > 0 || !isTerminal(stdin) || !isTerminalWriter(stderr) {
+		return n, nil
+	}
+	keep := "the current value"
+	if cur, err := gate.ConfiguredJobs(root); err == nil {
+		keep = strconv.Itoa(cur)
+	}
+	fmt.Fprintf(stderr, "Processes gates run at once on this machine (git config %s; Enter keeps %s):\n", gate.JobsKey, keep)
+	fmt.Fprint(stderr, "jobs> ")
+	line, err := bufio.NewReader(stdin).ReadString('\n')
+	if err != nil && len(line) == 0 {
+		return 0, errors.New("no input; rerun with --jobs N")
+	}
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return 0, nil
+	}
+	if n, err = strconv.Atoi(line); err != nil || n < 1 {
+		return 0, fmt.Errorf("jobs `%s`: want 1 or more", line)
+	}
+	return n, nil
+}
+
+// storeJobs writes n as this repository's gate process limit and returns
+// init's status for it.
+func storeJobs(root string, n int) (string, error) {
+	cur, ok, err := gitx.ConfigInt(root, gate.JobsKey)
+	switch {
+	case err == nil && ok && cur == n:
+		return "unchanged", nil
+	case err == nil && !ok:
+		return "created", gitx.SetLocalConfig(root, gate.JobsKey, strconv.Itoa(n))
+	}
+	return "updated", gitx.SetLocalConfig(root, gate.JobsKey, strconv.Itoa(n))
 }
 
 // parseHostSpec reads comma or space separated numbers or slugs into the

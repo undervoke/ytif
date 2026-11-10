@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -50,6 +51,35 @@ func Branch(root string) (string, error) {
 		return "", fmt.Errorf("git symbolic-ref HEAD: %v: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// ConfigInt reads key as an integer the way git config resolves it for root,
+// local over global. ok is false when no configuration sets key.
+func ConfigInt(root, key string) (n int, ok bool, err error) {
+	// config --get exits 1, printing nothing, when key is unset, so the exit
+	// code has to survive to here.
+	cmd := exec.Command("git", "-C", root, "config", "--type=int", "--get", key)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 1 && stderr.Len() == 0 {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("git config %s: %v: %s", key, err, strings.TrimSpace(stderr.String()))
+	}
+	n, err = strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0, false, fmt.Errorf("git config %s: %v", key, err)
+	}
+	return n, true, nil
+}
+
+// SetLocalConfig writes key in the repository's own git config.
+func SetLocalConfig(root, key, value string) error {
+	_, err := git(root, nil, "config", "--local", key, value)
+	return err
 }
 
 // RemoteURL returns the URL of a named remote. A remote that is not

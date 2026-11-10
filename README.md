@@ -42,7 +42,9 @@ ytif init --hosts claude-code,codex
 
 Init needs a root `go.mod`. It pins ytif as a tool, creates the ledger and the
 exemptions, wires `ytif commit` and `ytif push` into lefthook and `ytif ci`
-into a GitHub workflow, and registers the agent guard for the selected hosts. <!-- dinyd: internal/initcmd/initcmd.go#Run s1:268a94cada7b997c -->
+into a GitHub workflow, registers the agent guard for the selected hosts, and
+stores `--jobs N`, or the count it prompts for, as this machine's gate process
+limit. <!-- dinyd: internal/initcmd/initcmd.go#Run s1:0310ed3bed4b7f49 -->
 In ytif's own repository, init registers the checkout's command for gates. <!-- dinyd: internal/initcmd/initcmd.go#pinStep s1:cc8001f009c097c4 -->
 Agent guards in this repository use the installed ytif release on PATH, keeping their executable independent of source edits. <!-- dinyd: internal/initcmd/initcmd.go#plan s1:8fbb7f788c518487 -->
 Run `lefthook install`, then follow the approval steps init prints for each
@@ -229,6 +231,13 @@ this one depends on or keeps working.
 
 Every gate runs on the current working tree. The ledger's `gate:` section is required and sets how much of each member runs: `file` requests changed-file targeting, `affected` skips it when Nx places it in an unaffected project, and `full` runs its registered invocation unchanged. An `nx-target` entry is instead skipped when Nx reports its own target's task unaffected: from task inputs when Nx selects affected tasks (Nx 24 unless `affected.legacy` is set), otherwise from its project. An entry whose target the graph no longer has runs full. A ledger without `gate:` fails to load; `ytif init` writes the values above and fills missing gate settings while preserving existing ledger settings. `ytif init` also writes a missing `guard: {limit: 2m}` and fills a missing guard limit the same way. <!-- dinyd: internal/initcmd/initcmd.go#fillGate s1:d998944357315ed4 --> <!-- dinyd: internal/initcmd/initcmd.go#ledgerText s1:9afbf1fd266bb5e7 -->
 
+A gate runs at most `--jobs N` processes at once, else `git config ytif.jobs`,
+else 4. The limit counts processes, not the workers a tool starts inside one.
+Git config keeps it per machine and out of the repository: `ytif init` writes
+the repository's config, and `git config --global ytif.jobs N` covers every
+repository. CI checkouts have no such key and run 4 unless the workflow passes
+`--jobs`.
+
 An entry overrides the policy per gate or per CI profile:
 
 ```yaml
@@ -390,7 +399,7 @@ ledger-registered tool modes such as `prettier --check`, `tsc --noEmit`, and
 
 Whole-command elapsed evidence applies first, undivided. Otherwise the estimate
 is `max(longest, sum/workers)` over the identified verifications: shell lists
-add, gates divide by `--jobs` or CPU count, serial sources (dotnet, node/go
+add, gates divide by the process limit they would run with, serial sources (dotnet, node/go
 verify, nx-target) sum first, and unresolved worker counts fall back
 to the longest component. Evidence is local records only (last 10 samples in 30
 days per gate, largest gate mean; dotnet samples require one run invocation per

@@ -47,7 +47,7 @@ type command struct {
 
 // NewSource keeps the command entries in registration order and ignores
 // every other runner. jobs caps how many commands run at once; below 1 it
-// means 1. The caller passes 2 for check and the CPU count for the gates.
+// means 1. The gate passes its process limit.
 func NewSource(entries []inventory.Entry, jobs int) *Source {
 	if jobs < 1 {
 		jobs = 1

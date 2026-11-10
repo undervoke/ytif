@@ -14,7 +14,12 @@ import (
 // List prints managed checks and every finding, or only counts when summary
 // is set. It fails when there is any finding, as a gate would.
 func List(ctx context.Context, root string, sources []check.Source, config ConfigChecker, w, errw io.Writer, summary bool) int {
-	s, err := NewSurvey(proc.WithLimit(ctx, DefaultJobs), root, sources, config, errw)
+	jobs, err := ConfiguredJobs(root)
+	if err != nil {
+		fmt.Fprintf(errw, "ytif: %v\n", err)
+		return ExitUsage
+	}
+	s, err := NewSurvey(proc.WithLimit(ctx, jobs), root, sources, config, errw)
 	if err != nil {
 		fmt.Fprintf(errw, "ytif: %v\n", err)
 		return ExitUsage

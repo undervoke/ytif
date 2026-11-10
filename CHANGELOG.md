@@ -7,6 +7,14 @@ module proxy may already have cached that version.
 
 ## [Unreleased]
 
+### Added
+
+- `git config ytif.jobs N` sets how many processes gates run at once on a machine, below `--jobs` and above the default. `ytif init --jobs N`, or its prompt on a terminal, writes it to the repository's config.
+
+### Changed
+
+- Gates run at most 4 processes at once by default instead of one per CPU. CI keeps this default unless its workflow passes `--jobs`.
+
 ### Fixed
 
 - The Claude Code and Codex guard hooks run the pinned tool from the project root (`$CLAUDE_PROJECT_DIR`, the Git top level), so a session that moved into a nested Go module without the tool pin still runs the guard.

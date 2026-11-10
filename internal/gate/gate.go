@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -30,7 +29,7 @@ type Options struct {
 	Profile      string
 	Head         string
 	TargetBranch string
-	Jobs         int       // processes run at once; 0 means DefaultJobs
+	Jobs         int       // processes run at once; 0 means ConfiguredJobs
 	Report       string    // "" or "github"
 	Record       bool      // append records for this trigger
 	Records      string    // "" means the managed <git-common-dir>/ytif/records/active.jsonl
@@ -41,8 +40,28 @@ type Options struct {
 	Config       ConfigChecker
 }
 
+// JobsKey is the git config key that sets how many processes gates run at
+// once on a machine. It lives outside the ledger so each machine sets its own
+// and CI, which has no such key, keeps DefaultJobs or its --jobs flag.
+const JobsKey = "ytif.jobs"
+
 // DefaultJobs is how many processes a gate runs at once unless told.
-var DefaultJobs = runtime.NumCPU()
+const DefaultJobs = 4
+
+// ConfiguredJobs returns the process limit JobsKey sets for root, or
+// DefaultJobs when nothing sets it.
+func ConfiguredJobs(root string) (int, error) {
+	n, ok, err := gitx.ConfigInt(root, JobsKey)
+	switch {
+	case err != nil:
+		return 0, err
+	case !ok:
+		return DefaultJobs, nil
+	case n < 1:
+		return 0, fmt.Errorf("git config %s %d: want 1 or more", JobsKey, n)
+	}
+	return n, nil
+}
 
 // dispatchError is a selected check that produced no outcome.
 type dispatchError struct {
@@ -58,7 +77,11 @@ func Run(ctx context.Context, root string, o Options) int {
 	}
 	jobs := o.Jobs
 	if jobs == 0 {
-		jobs = DefaultJobs
+		var err error
+		if jobs, err = ConfiguredJobs(root); err != nil {
+			fmt.Fprintf(o.Stderr, "ytif: %v\n", err)
+			return ExitUsage
+		}
 	}
 	ctx = proc.WithLimit(ctx, jobs)
 	s, err := loadSurvey(ctx, root, o.Sources, o.Config, o.Stderr, jobs)

@@ -302,7 +302,7 @@ func priceGate(c shellcmd.Command, gateName string, rd *repoData) (durationDecis
 	if hasNonLiteralFlag(c, "--profile") {
 		return durationDecision{}, false
 	}
-	workers, knownWorkers := gateWorkers(c)
+	workers, knownWorkers := gateWorkers(c, rd.root)
 	policy, err := rd.inv.Gate.Context(gateName, profile)
 	if err != nil {
 		return durationDecision{}, false
@@ -1051,8 +1051,9 @@ func hasNonLiteralFlag(c shellcmd.Command, flag string) bool {
 }
 
 // gateWorkers reads a gate's --jobs: a literal positive count, else the
-// gate's own default. A non-literal count divides nothing the guard can name.
-func gateWorkers(c shellcmd.Command) (int, bool) {
+// count the gate resolves for root itself. A non-literal count divides
+// nothing the guard can name.
+func gateWorkers(c shellcmd.Command, root string) (int, bool) {
 	for i := 1; i < len(c.Args); i++ {
 		a := c.Args[i]
 		base, _, _ := strings.Cut(a, "=")
@@ -1075,7 +1076,8 @@ func gateWorkers(c shellcmd.Command) (int, bool) {
 		}
 		return n, true
 	}
-	return gate.DefaultJobs, true
+	n, err := gate.ConfiguredJobs(root)
+	return n, err == nil
 }
 
 // goWorkers reads `go test -p`, else the process parallelism Go would use.
