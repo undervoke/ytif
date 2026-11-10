@@ -7,6 +7,8 @@ module proxy may already have cached that version.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-10
+
 ### Added
 
 - `git config ytif.jobs N` sets how many processes gates run at once on a machine, below `--jobs` and above the default. `ytif init --jobs N`, or its prompt on a terminal, writes it to the repository's config.
@@ -285,7 +287,8 @@ Existing `version: 2` inventories remain compatible. `commands:` is optional and
 
 - Checks run without the hook repository's git environment variables.
 
-[Unreleased]: https://github.com/undervoke/ytif/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/undervoke/ytif/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/undervoke/ytif/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/undervoke/ytif/compare/v0.16.1...v0.17.0
 [0.16.1]: https://github.com/undervoke/ytif/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/undervoke/ytif/compare/v0.15.0...v0.16.0
