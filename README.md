@@ -373,8 +373,14 @@ registered by `ytif init` for the selected hosts:
 Consumer-project hooks and plugins run `go tool ytif`, so Go must be on the
 host's `PATH`, including hosts launched from a GUI. This repository's guards
 use the installed release described under [Adopt](#adopt).
-When a guard cannot start, the OpenCode, Kilo Code, and Pi plugins allow the
-command with a warning.
+The Claude Code and Codex hooks run it from the project root
+(`$CLAUDE_PROJECT_DIR`, the Git top level), because those hosts start hooks in
+the session's directory, where a nested module without the pin cannot resolve
+the tool.
+When a guard cannot start, every host allows the command with a warning. The
+hooks end in `|| exit 1` because these hosts read exit 2 as a refusal, and Go
+exits 2 when it cannot run the tool. Rerunning `ytif init` rewrites a guard
+hook an earlier version registered.
 
 It prices, directly or through a package manager, `ytif commit`, `ytif push`,
 and `ytif ci`; supported test runners; package scripts and Nx

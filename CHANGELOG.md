@@ -7,6 +7,15 @@ module proxy may already have cached that version.
 
 ## [Unreleased]
 
+### Fixed
+
+- The Claude Code and Codex guard hooks run the pinned tool from the project root (`$CLAUDE_PROJECT_DIR`, the Git top level), so a session that moved into a nested Go module without the tool pin still runs the guard.
+- A guard hook that cannot start allows the command with a warning on every host. Go exits 2 when it cannot run the tool, which Claude Code, Codex, and Cursor read as a refusal, so it used to block every shell command, including the one that would recover. The hooks now end in `|| exit 1`.
+
+### Upgrade
+
+Rerun `ytif init` to rewrite the guard hooks an earlier version registered.
+
 ## [0.17.0] - 2026-11-09
 
 ### Changed

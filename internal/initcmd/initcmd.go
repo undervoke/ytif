@@ -37,9 +37,12 @@ import (
 )
 
 const (
-	guardCommand                = "go tool ytif guard"
+	// failOpen ends every go-tool guard command: the hosts read exit 2 as a
+	// refusal, and go exits 2 when it cannot run the tool, so a guard that
+	// cannot start would refuse every command, the way back included.
+	failOpen                    = " || exit 1"
 	installedGuardCommand       = "ytif guard"
-	cursorGuardCommand          = "go tool ytif guard --host cursor"
+	cursorGuardCommand          = "go tool ytif guard --host cursor" + failOpen
 	installedCursorGuardCommand = "ytif guard --host cursor"
 	workflowFile                = ".github/workflows/ytif.yml"
 
@@ -50,6 +53,21 @@ const (
 	kiloRel     = ".kilo/plugin/ytif-guard.ts"
 	piRel       = ".pi/extensions/ytif-guard.ts"
 )
+
+// guardRoots is the directory each Claude-style hooks file's go-tool guard
+// passes to go -C. Claude Code and Codex start hooks in the session's
+// directory, where a nested module without the tool pin cannot resolve it;
+// Cursor starts project hooks at the project root.
+var guardRoots = map[string]string{
+	claudeRel: `"$CLAUDE_PROJECT_DIR"`,
+	codexRel:  `"$(git rev-parse --show-toplevel)"`,
+}
+
+// pinnedGuardCommand is the go-tool guard command for a Claude-style hooks
+// file.
+func pinnedGuardCommand(rel string) string {
+	return "go -C " + guardRoots[rel] + " tool ytif guard" + failOpen
+}
 
 // hostSlugs are the accepted --hosts values, in display order.
 var hostSlugs = []string{"claude-code", "codex", "opencode", "kilo", "cursor", "pi"}
@@ -243,8 +261,8 @@ func parseHostSpec(spec string) ([]string, error) {
 
 // existingHosts reports the hosts with a detectable ytif registration. It
 // is conservative and read-only: missing or unreadable files only mean the
-// host is not preselected. Detection reuses the planners in canonical order,
-// so preselection matches what plan considers done.
+// host is not preselected. Detection reuses the planners' recognition in
+// canonical order, so a registration plan would rewrite stays preselected.
 func existingHosts(root string) []string {
 	out := []string{}
 	if hasJSONGuard(root, claudeRel) {
@@ -271,15 +289,39 @@ func existingHosts(root string) []string {
 // hasJSONGuard reports whether the Claude-style hooks file already runs the
 // ytif guard, reusing the planner's own recognition.
 func hasJSONGuard(root, rel string) bool {
-	f, err := hookConfig(root, rel, false)
-	return err == nil && f.status == "unchanged"
+	data, ok, err := read(root, rel)
+	if err != nil || !ok {
+		return false
+	}
+	var doc struct {
+		Hooks struct {
+			PreToolUse []json.RawMessage `json:"PreToolUse"`
+		} `json:"hooks"`
+	}
+	if json.Unmarshal(data, &doc) != nil {
+		return false
+	}
+	found, _ := scanHooks(doc.Hooks.PreToolUse, rel, false)
+	return found
 }
 
 // hasCursorGuard reports whether the Cursor hooks file already carries the
 // unrestricted ytif guard, reusing the planner's own recognition.
 func hasCursorGuard(root string) bool {
-	f, err := cursorHookConfig(root, false)
-	return err == nil && f.status == "unchanged"
+	data, ok, err := read(root, cursorRel)
+	if err != nil || !ok {
+		return false
+	}
+	var doc struct {
+		Hooks struct {
+			BeforeShellExecution []json.RawMessage `json:"beforeShellExecution"`
+		} `json:"hooks"`
+	}
+	if json.Unmarshal(data, &doc) != nil {
+		return false
+	}
+	found, _ := scanCursor(doc.Hooks.BeforeShellExecution, false)
+	return found
 }
 
 // hasPluginGuard reports whether a plugin file looks like a ytif guard.
@@ -1293,8 +1335,8 @@ func normalizeYAML(data []byte) []byte {
 // hookConfig registers the guard as a PreToolUse hook in a Claude Code or
 // Codex hooks file, unless a foreground hook already runs it. Exec form is
 // recognized for Claude Code only. In ytif's own module the guard runs as
-// the installed ytif, elsewhere as the pinned tool; a go-tool guard there
-// is rewritten in place instead of appended.
+// the installed ytif, elsewhere as the pinned tool; a go-tool guard that
+// differs from that is rewritten in place instead of appended.
 func hookConfig(root, rel string, local bool) (file, error) {
 	data, ok, err := read(root, rel)
 	if err != nil {
@@ -1319,16 +1361,16 @@ func hookConfig(root, rel string, local bool) (file, error) {
 			return file{}, fmt.Errorf("%s: hooks.PreToolUse is not a list", rel)
 		}
 	}
-	want := guardCommand
+	want := pinnedGuardCommand(rel)
 	if local {
 		want = installedGuardCommand
 	}
-	found, sites := scanHooks(pre, rel)
-	if found && (!local || len(sites) == 0) {
+	found, sites := scanHooks(pre, rel, local)
+	if found && len(sites) == 0 {
 		return file{path: rel, want: data, status: "unchanged"}, nil
 	}
-	if len(sites) > 0 { // local with go-tool guards to migrate
-		rewritten, err := migrateHooks(pre, sites)
+	if len(sites) > 0 {
+		rewritten, err := migrateHooks(pre, sites, want)
 		if err != nil {
 			return file{}, fmt.Errorf("%s: %v", rel, err)
 		}
@@ -1369,7 +1411,8 @@ func hookConfig(root, rel string, local bool) (file, error) {
 // when it runs the guard for Cursor with no type or type command and an
 // unrestricted matcher. Only version 1 is edited. In ytif's own module the
 // guard runs as the installed ytif, elsewhere as the pinned tool; a
-// go-tool guard there is rewritten in place instead of appended.
+// go-tool guard that differs from that is rewritten in place instead of
+// appended.
 func cursorHookConfig(root string, local bool) (file, error) {
 	data, ok, err := read(root, cursorRel)
 	if err != nil {
@@ -1404,8 +1447,8 @@ func cursorHookConfig(root string, local bool) (file, error) {
 	if local {
 		wantCursor = installedCursorGuardCommand
 	}
-	found, sites := scanCursor(list)
-	if found && (!local || len(sites) == 0) {
+	found, sites := scanCursor(list, local)
+	if found && len(sites) == 0 {
 		if _, hasVersion := top.get("version"); hasVersion {
 			return file{path: cursorRel, want: data, status: "unchanged"}, nil
 		}
@@ -1416,8 +1459,8 @@ func cursorHookConfig(root string, local bool) (file, error) {
 		}
 		return compare(root, cursorRel, out)
 	}
-	if len(sites) > 0 { // local with go-tool guards to migrate
-		rewritten, err := migrateCursor(list, sites)
+	if len(sites) > 0 {
+		rewritten, err := migrateCursor(list, sites, wantCursor)
 		if err != nil {
 			return file{}, fmt.Errorf("%s: %v", cursorRel, err)
 		}
@@ -1459,6 +1502,23 @@ const (
 	directGuard
 	goToolGuard
 )
+
+// shellGuard reduces a shell-form hook command to the guard's words, and
+// reports which guardRoots directory a go-tool guard passes to go -C and
+// whether the command ends in failOpen.
+func shellGuard(command string) (f []string, root string, open bool) {
+	command, open = strings.CutSuffix(strings.TrimSpace(command), failOpen)
+	exe, rest, _ := strings.Cut(strings.TrimSpace(command), " ")
+	if path.Base(strings.Trim(exe, `"'`)) == "go" {
+		for _, dir := range guardRoots {
+			if r, ok := strings.CutPrefix(strings.TrimSpace(rest), "-C "+dir+" "); ok {
+				command, root = exe+" "+r, dir
+				break
+			}
+		}
+	}
+	return guardFields(command, nil), root, open
+}
 
 // guardFields splits command with args into words. Shell form trims quotes
 // around the executable; exec form is already split.
@@ -1536,7 +1596,7 @@ type hookEntry struct {
 	If          string          `json:"if"`
 }
 
-// hookSite locates one go-tool guard hook inside pre for migration.
+// hookSite locates one go-tool guard hook inside pre for rewriting.
 type hookSite struct {
 	group, hook int
 	exec        bool
@@ -1550,9 +1610,11 @@ func foreground(h hookEntry, rel string) bool {
 }
 
 // scanHooks decodes each PreToolUse group once and reports whether any
-// foreground Bash hook runs the guard, and where the go-tool guards are. A
-// missing matcher selects every tool, including Bash.
-func scanHooks(pre []json.RawMessage, rel string) (bool, []hookSite) {
+// foreground Bash hook runs the guard, and where the go-tool guards to
+// rewrite are: every one in ytif's own module, elsewhere each shell-form one
+// lacking this file's root or failOpen. A missing matcher selects every
+// tool, including Bash.
+func scanHooks(pre []json.RawMessage, rel string, local bool) (bool, []hookSite) {
 	var found bool
 	var sites []hookSite
 	for i, m := range pre {
@@ -1567,29 +1629,37 @@ func scanHooks(pre []json.RawMessage, rel string) (bool, []hookSite) {
 			if !foreground(h, rel) {
 				continue
 			}
-			switch guardFormOf(guardFields(h.Command, h.Args)) {
+			execForm := h.Args != nil
+			f, root, open := guardFields(h.Command, h.Args), "", false
+			if !execForm {
+				f, root, open = shellGuard(h.Command)
+			}
+			switch guardFormOf(f) {
 			case directGuard:
 				found = true
 			case goToolGuard:
 				found = true
-				sites = append(sites, hookSite{i, j, h.Args != nil})
+				if local || (!execForm && (root != guardRoots[rel] || !open)) {
+					sites = append(sites, hookSite{i, j, execForm})
+				}
 			}
 		}
 	}
 	return found, sites
 }
 
-// migrateHooks rewrites the flagged go-tool guards to the installed guard,
-// keeping the shell or exec form and every other key. Only flagged groups
-// are re-decoded, as ordered objects.
-func migrateHooks(pre []json.RawMessage, sites []hookSite) ([]json.RawMessage, error) {
+// migrateHooks rewrites the flagged go-tool guards to the shell command
+// want, keeping every other key. Exec-form sites, flagged only in ytif's own
+// module, keep exec form as the installed guard. Only flagged groups are
+// re-decoded, as ordered objects.
+func migrateHooks(pre []json.RawMessage, sites []hookSite, want string) ([]json.RawMessage, error) {
 	out := make([]json.RawMessage, len(pre))
 	copy(out, pre)
 	byGroup := map[int][]hookSite{}
 	for _, s := range sites {
 		byGroup[s.group] = append(byGroup[s.group], s)
 	}
-	shell, err := marshal(installedGuardCommand)
+	shell, err := marshal(want)
 	if err != nil {
 		return nil, err
 	}
@@ -1647,8 +1717,9 @@ func migrateHooks(pre []json.RawMessage, sites []hookSite) ([]json.RawMessage, e
 
 // scanCursor decodes each beforeShellExecution entry once and reports
 // whether any unrestricted entry runs the guard, and where the go-tool
-// guards are.
-func scanCursor(list []json.RawMessage) (bool, []int) {
+// guards to rewrite are: every one in ytif's own module, elsewhere each one
+// lacking failOpen.
+func scanCursor(list []json.RawMessage, local bool) (bool, []int) {
 	var found bool
 	var sites []int
 	for i, entry := range list {
@@ -1663,23 +1734,26 @@ func scanCursor(list []json.RawMessage) (bool, []int) {
 		if (item.Type != "" && item.Type != "command") || (item.Matcher != "" && item.Matcher != "*") {
 			continue
 		}
-		switch guardFormOf(cursorFields(item.Command)) {
+		command, open := strings.CutSuffix(strings.TrimSpace(item.Command), failOpen)
+		switch guardFormOf(cursorFields(command)) {
 		case directGuard:
 			found = true
 		case goToolGuard:
 			found = true
-			sites = append(sites, i)
+			if local || !open {
+				sites = append(sites, i)
+			}
 		}
 	}
 	return found, sites
 }
 
-// migrateCursor rewrites the flagged go-tool guards to the installed guard,
-// keeping every other key.
-func migrateCursor(list []json.RawMessage, sites []int) ([]json.RawMessage, error) {
+// migrateCursor rewrites the flagged go-tool guards to want, keeping every
+// other key.
+func migrateCursor(list []json.RawMessage, sites []int, want string) ([]json.RawMessage, error) {
 	out := make([]json.RawMessage, len(list))
 	copy(out, list)
-	command, err := marshal(installedCursorGuardCommand)
+	command, err := marshal(want)
 	if err != nil {
 		return nil, err
 	}
