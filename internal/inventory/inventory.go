@@ -13,6 +13,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,7 +32,7 @@ const (
 	// ExemptionsFile lists gate entries running outside ytif.
 	ExemptionsFile = "ytif-gate-exemptions.yaml"
 
-	inventoryVersion  = 3
+	inventoryVersion  = 4
 	exemptionsVersion = 2
 
 	// CommandRunner is the runner name for project-owned direct commands
@@ -260,17 +262,19 @@ type Prep struct {
 // Entry is one verification's contract and gate membership. Tags describe
 // the accident in the built-in and project vocabularies; Requires and
 // Ensures name other inventoried verifications this one directly depends
-// on or keeps working. Commit and SkipPush place the entry: every
-// entry belongs to CI and, unless skipped, to push. Run, Cwd and Exclusive
-// are set only for CommandRunner entries and keep the direct-command
-// execution fields. Origin identifies the file and list position the entry
-// was loaded from; it is diagnostics only and never serialized.
+// on or keeps working. Commit places the entry explicitly; Push is tri-state
+// (absent inherits gate.push.default, true includes, false excludes): every
+// entry belongs to CI. Run, Cwd and Exclusive are set only for CommandRunner
+// entries and keep the direct-command execution fields. Origin identifies
+// the file and list position the entry was loaded from; it is diagnostics
+// only and never serialized. pushMember/pushSet hold the default-resolved
+// push membership fixed during composition so Member needs no gate argument.
 type Entry struct {
 	Runner     string                       `yaml:"runner"`
 	Unit       string                       `yaml:"unit,omitempty"`
 	Name       string                       `yaml:"name"`
 	Commit     bool                         `yaml:"commit,omitempty"`
-	SkipPush   bool                         `yaml:"skip-push,omitempty"`
+	Push       *bool                        `yaml:"push,omitempty"`
 	Scope      map[string]check.TargetScope `yaml:"scope,omitempty"`
 	Run        []string                     `yaml:"run,omitempty"`
 	Cwd        string                       `yaml:"cwd,omitempty"`
@@ -284,6 +288,9 @@ type Entry struct {
 	DeleteWhen string                       `yaml:"delete_when,omitempty"`
 	Origin     string                       `yaml:"-"` // file: verifications[i], diagnostics only
 	File       string                       `yaml:"-"` // file the entry was defined in
+
+	pushMember bool `yaml:"-"`
+	pushSet    bool `yaml:"-"`
 }
 
 // Ref names another inventoried verification.
@@ -313,14 +320,21 @@ func (e Entry) Key() check.Key {
 }
 
 // Member reports whether the entry runs at the named gate. Commit
-// membership is explicit; every entry belongs to CI and, unless skipped,
-// to push. Unknown gate names are not members.
+// membership is explicit; push membership is the composed default-resolved
+// bit when available, otherwise the raw intent with omitted defaulting to
+// include; every entry belongs to CI. Unknown gate names are not members.
 func (e Entry) Member(gate string) bool {
 	switch gate {
 	case check.GateCommit:
 		return e.Commit
 	case check.GatePush:
-		return !e.SkipPush
+		if e.pushSet {
+			return e.pushMember
+		}
+		if e.Push != nil {
+			return *e.Push
+		}
+		return true
 	case check.GateCI:
 		return true
 	}
@@ -404,6 +418,9 @@ type fragmentFile struct {
 
 // composeInventory is shared by the file loader and init's byte preflight.
 // realRoot seeds include-cycle detection when the root file already exists.
+// It fixes the root push default onto every entry so Member needs no gate
+// argument: explicit push wins, omission inherits gate.push.default with
+// omitted default meaning include.
 func composeInventory(root string, raw Inventory, realRoot string) (Inventory, error) {
 	const display = InventoryFile
 	if raw.Version != inventoryVersion {
@@ -436,6 +453,15 @@ func composeInventory(root string, raw Inventory, realRoot string) (Inventory, e
 	}
 	if err := l.addIncludes(root, display, raw.Includes, stack); err != nil {
 		return Inventory{}, err
+	}
+	include := raw.Gate.Push.includeByDefault()
+	for i := range l.out {
+		if l.out[i].Push != nil {
+			l.out[i].pushMember = *l.out[i].Push
+		} else {
+			l.out[i].pushMember = include
+		}
+		l.out[i].pushSet = true
 	}
 	if err := validateEntryScopes(l.out, raw.Gate, display); err != nil {
 		return Inventory{}, err
@@ -779,30 +805,50 @@ func relDisplay(root, path string) string {
 }
 
 // Migrate converts the legacy ledger at root/ytif-inventory.yaml (version 2)
-// to root/ytif-verifications.yaml (version 3). It validates the old shape,
-// rewrites the document tree so comments survive, and preflights the result
-// through the new strict reader before saving. Checks become verifications:
-// a commit placement becomes commit: true, push and ci placements become the
-// new push-and-CI default. Commands become runner: command entries keeping
-// their name, run, cwd and exclusive fields. Skip-push
-// is never assigned automatically; the notice names the resulting push and
-// CI expansion: the notice lists the exact keys that gain push membership
-// so the host can add explicit exclusions. The legacy file is
-// removed only after the new file is safely written; collisions preserve the
-// input and reruns leave a migrated root unchanged.
+// to root/ytif-verifications.yaml (version 4), or a version-3 ledger to
+// version 4. It validates the old shape, rewrites the document tree so
+// comments survive, and preflights the result through the new strict reader
+// before saving. v2 checks become verifications: a commit placement becomes
+// commit: true, push and ci placements become the push-and-CI default.
+// Commands become runner: command entries keeping their name, run, cwd and
+// exclusive fields. Push membership is never assigned automatically; the
+// notice names the resulting push and CI expansion: the notice lists the
+// exact keys that gain push membership so the host can add explicit
+// exclusions. v3 migration inverts every explicit skip-push boolean
+// (true->push:false, false->push:true), preserves omissions and YAML
+// anchors/merges/includes/comments, drops scope.push only when every
+// included entry's resolved push scope already equals the CI scope, and
+// leaves all files unchanged on mismatch. The legacy file is removed only
+// after the new file is safely written; collisions preserve the input and
+// reruns leave a migrated root unchanged.
 func Migrate(root string, out io.Writer) error {
 	oldPath := filepath.Join(root, LegacyInventoryFile)
 	newPath := filepath.Join(root, InventoryFile)
 	oldData, err := os.ReadFile(oldPath)
 	if errors.Is(err, fs.ErrNotExist) {
-		if _, nerr := os.Stat(newPath); nerr == nil {
+		data, rerr := os.ReadFile(newPath)
+		if rerr != nil {
+			if errors.Is(rerr, fs.ErrNotExist) {
+				return fmt.Errorf("no %s in %s; nothing to migrate", LegacyInventoryFile, root)
+			}
+			return rerr
+		}
+		ver, verr := ledgerVersion(data)
+		if verr != nil {
+			return verr
+		}
+		switch ver {
+		case inventoryVersion:
 			if _, lerr := LoadInventory(root); lerr != nil {
 				return lerr
 			}
 			fmt.Fprintf(out, "already migrated: %s is current\n", InventoryFile)
 			return nil
+		case 3:
+			return migrateV3ToV4(root, out)
+		default:
+			return fmt.Errorf("%s: version %d, want %d; run ytif migrate from a supported ledger", InventoryFile, ver, inventoryVersion)
 		}
-		return fmt.Errorf("no %s in %s; nothing to migrate", LegacyInventoryFile, root)
 	}
 	if err != nil {
 		return err
@@ -894,7 +940,7 @@ func Migrate(root string, out io.Writer) error {
 	fmt.Fprintf(out, "migrated %s -> %s: %d verifications (%d commit:true, %d push+CI default, %d from commands)\n",
 		LegacyInventoryFile, InventoryFile, total, counts.commit, counts.preset, counts.commands)
 	if len(counts.gainedPush) > 0 {
-		fmt.Fprintf(out, "note: these gain push membership (old ci-only checks and commands); ytif did not assign skip-push, add \"skip-push: true\" where push must not run them:\n")
+		fmt.Fprintf(out, "note: these gain push membership (old ci-only checks and commands); ytif did not assign push, add \"push: false\" where push must not run them:\n")
 		for _, k := range counts.gainedPush {
 			fmt.Fprintf(out, "  - %s\n", k)
 		}
@@ -913,7 +959,7 @@ type migrateCounts struct {
 }
 
 // transformLegacy rewrites a legacy version-2 document tree in place into
-// the version-3 shape, preserving comments and unrelated content.
+// the version-4 shape, preserving comments and unrelated content.
 func transformLegacy(doc *yaml.Node, checks []legacyEntry) (migrateCounts, error) {
 	var counts migrateCounts
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) != 1 {
@@ -940,7 +986,7 @@ func transformLegacy(doc *yaml.Node, checks []legacyEntry) (migrateCounts, error
 			if v.Kind != yaml.ScalarNode || v.Value != "2" {
 				return counts, fmt.Errorf("%s: version %q: can only migrate version 2", LegacyInventoryFile, v.Value)
 			}
-			v.Value = "3"
+			v.Value = "4"
 			v.Tag = "!!int"
 		case "vocabulary", "prepare":
 		case "checks":
@@ -1031,7 +1077,7 @@ func insertLegacyGate(top *yaml.Node) {
 	}
 	gate := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
 		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "commit"}, scope("file"),
-		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "push"}, scope("full"),
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "push"}, &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"},
 		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "ci"}, scope("full"),
 	}}
 	key := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "gate"}
@@ -1166,4 +1212,551 @@ func transformLegacyCommands(seq *yaml.Node, counts *migrateCounts) ([]*yaml.Nod
 
 func isNull(n *yaml.Node) bool {
 	return n.Tag == "!!null" || (n.Kind == yaml.ScalarNode && n.Value == "")
+}
+
+// ledgerVersion reads only the version field so Migrate can dispatch
+// between v2, v3 and current ledgers without strict full decoding.
+func ledgerVersion(data []byte) (int, error) {
+	var v struct {
+		Version int `yaml:"version"`
+	}
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	if err := dec.Decode(&v); err != nil {
+		if errors.Is(err, io.EOF) {
+			return 0, fmt.Errorf("%s: empty file", InventoryFile)
+		}
+		return 0, fmt.Errorf("%s: %w", InventoryFile, err)
+	}
+	return v.Version, nil
+}
+
+// v3PushScope mirrors the retired v3 push policy for migration comparison.
+type v3PushScope struct {
+	Scope     *check.TargetScope `yaml:"scope,omitempty"`
+	CiProfile string             `yaml:"ci-profile,omitempty"`
+}
+
+// v3GateConfig mirrors the v3 gate for migration comparison.
+type v3GateConfig struct {
+	Commit GateScope   `yaml:"commit"`
+	Push   v3PushScope `yaml:"push"`
+	CI     CIScope     `yaml:"ci"`
+}
+
+// v3Entry mirrors the v3 verification for migration reads.
+type v3Entry struct {
+	Runner     string                       `yaml:"runner"`
+	Unit       string                       `yaml:"unit,omitempty"`
+	Name       string                       `yaml:"name"`
+	Commit     bool                         `yaml:"commit,omitempty"`
+	SkipPush   bool                         `yaml:"skip-push,omitempty"`
+	Scope      map[string]check.TargetScope `yaml:"scope,omitempty"`
+	Run        []string                     `yaml:"run,omitempty"`
+	Cwd        string                       `yaml:"cwd,omitempty"`
+	Exclusive  []string                     `yaml:"exclusive,omitempty"`
+	Tags       []string                     `yaml:"tags,omitempty"`
+	Requires   []Ref                        `yaml:"requires,omitempty"`
+	Ensures    []Ref                        `yaml:"ensures,omitempty"`
+	Accident   string                       `yaml:"accident,omitempty"`
+	Detection  string                       `yaml:"detection,omitempty"`
+	Impact     string                       `yaml:"impact,omitempty"`
+	DeleteWhen string                       `yaml:"delete_when,omitempty"`
+}
+
+// Key returns the verification key, matching Entry.Key.
+func (e v3Entry) Key() check.Key {
+	if e.Runner == CommandRunner {
+		unit := e.Cwd
+		if unit == "" {
+			unit = "."
+		}
+		return check.Key{Runner: e.Runner, Unit: unit, Name: e.Name}
+	}
+	return check.Key{Runner: e.Runner, Unit: e.Unit, Name: e.Name}
+}
+
+// v3Inventory mirrors the v3 root for migration reads.
+type v3Inventory struct {
+	Version       int          `yaml:"version"`
+	Gate          v3GateConfig `yaml:"gate"`
+	Vocabulary    Vocabulary   `yaml:"vocabulary,omitempty"`
+	Prepare       []Prep       `yaml:"prepare,omitempty"`
+	Board         BoardConfig  `yaml:"board,omitempty"`
+	Guard         GuardConfig  `yaml:"guard,omitempty"`
+	NxTargets     bool         `yaml:"nx-targets,omitempty"`
+	Includes      []string     `yaml:"includes,omitempty"`
+	Verifications []v3Entry    `yaml:"verifications"`
+}
+
+// v3Fragment mirrors a v3 included fragment.
+type v3Fragment struct {
+	Includes      []string  `yaml:"includes,omitempty"`
+	Verifications []v3Entry `yaml:"verifications"`
+}
+
+type v3FileData struct {
+	rel           string
+	doc           yaml.Node
+	isRoot        bool
+	verifications []v3Entry
+	includes      []string
+	data          []byte
+	transformed   []byte
+}
+
+// oldPushScope resolves the v3 requested push scope and its origin.
+func oldPushScope(g v3GateConfig, e v3Entry) (check.TargetScope, string) {
+	if g.Push.CiProfile != "" {
+		prof := g.Push.CiProfile
+		if s, ok := e.Scope[check.GateCI+"/"+prof]; ok {
+			return s, "scope.ci/" + prof
+		}
+		if s, ok := e.Scope[check.GateCI]; ok {
+			return s, "scope.ci"
+		}
+		p := g.CI.Profiles[prof]
+		if p.Scope != nil {
+			return *p.Scope, "gate.ci.profiles." + prof + ".scope"
+		}
+		return g.CI.Scope, "gate.ci.scope"
+	}
+	if s, ok := e.Scope[check.GatePush]; ok {
+		return s, "scope.push"
+	}
+	if g.Push.Scope != nil {
+		return *g.Push.Scope, "gate.push.scope"
+	}
+	return "", "gate.push.scope"
+}
+
+// newPushScope resolves the v4 requested push scope (always the CI chain)
+// and its origin, using the preserved CI policy and ci-profile.
+func newPushScope(g v3GateConfig, e v3Entry) (check.TargetScope, string) {
+	prof := g.Push.CiProfile
+	if prof != "" {
+		if s, ok := e.Scope[check.GateCI+"/"+prof]; ok {
+			return s, "scope.ci/" + prof
+		}
+	}
+	if s, ok := e.Scope[check.GateCI]; ok {
+		return s, "scope.ci"
+	}
+	if prof != "" {
+		p := g.CI.Profiles[prof]
+		if p.Scope != nil {
+			return *p.Scope, "gate.ci.profiles." + prof + ".scope"
+		}
+	}
+	return g.CI.Scope, "gate.ci.scope"
+}
+
+func (g v3GateConfig) validateV3(display string) error {
+	if g.Commit.Scope == "" || !g.Commit.Scope.Valid() {
+		if g.Commit.Scope == "" {
+			return fmt.Errorf("%s: gate.commit.scope: set scope to file, affected or full", display)
+		}
+		return fmt.Errorf("%s: gate.commit.scope %q: want file, affected or full", display, string(g.Commit.Scope))
+	}
+	if g.CI.Scope == "" || !g.CI.Scope.Valid() {
+		if g.CI.Scope == "" {
+			return fmt.Errorf("%s: gate.ci.scope: set scope to file, affected or full", display)
+		}
+		return fmt.Errorf("%s: gate.ci.scope %q: want file, affected or full", display, string(g.CI.Scope))
+	}
+	hasScope := g.Push.Scope != nil
+	hasProfile := g.Push.CiProfile != ""
+	switch {
+	case hasScope && hasProfile:
+		return fmt.Errorf("%s: gate.push: set exactly one of scope or ci-profile, have both", display)
+	case !hasScope && !hasProfile:
+		return fmt.Errorf("%s: gate.push: set exactly one of scope or ci-profile", display)
+	case hasScope && !g.Push.Scope.Valid():
+		return fmt.Errorf("%s: gate.push.scope %q: want file, affected or full", display, string(*g.Push.Scope))
+	}
+	for name, p := range g.CI.Profiles {
+		if name == "" {
+			return fmt.Errorf("%s: gate.ci.profiles: profile name is empty", display)
+		}
+		if p.Scope != nil && !p.Scope.Valid() {
+			return fmt.Errorf("%s: gate.ci.profiles.%s.scope %q: want file, affected or full", display, name, string(*p.Scope))
+		}
+	}
+	if hasProfile {
+		if _, ok := g.CI.Profiles[g.Push.CiProfile]; !ok {
+			return fmt.Errorf("%s: gate.push ci-profile %q: unknown profile", display, g.Push.CiProfile)
+		}
+	}
+	return nil
+}
+
+// validateV3EntryScopes rejects invalid v3 scope keys before comparison so a
+// v3 ledger that never loaded does not migrate into a silently fixed v4.
+func validateV3EntryScopes(entries []v3Entry, gate v3GateConfig, display string) error {
+	profiles := map[string]bool{}
+	for name := range gate.CI.Profiles {
+		profiles[name] = true
+	}
+	mapped := gate.Push.CiProfile != ""
+	for idx, e := range entries {
+		loc := fmt.Sprintf("%s: verifications[%d]", display, idx)
+		keys := make([]string, 0, len(e.Scope))
+		for k := range e.Scope {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			v := e.Scope[k]
+			if !v.Valid() {
+				return fmt.Errorf("%s: scope.%s %q: want file, affected or full", loc, k, string(v))
+			}
+			switch k {
+			case check.GateCommit, check.GatePush, check.GateCI:
+			default:
+				name, ok := strings.CutPrefix(k, check.GateCI+"/")
+				if !ok || name == "" {
+					return fmt.Errorf("%s: scope.%q: unknown scope, want commit, push, ci or ci/<profile>", loc, k)
+				}
+				if !profiles[name] {
+					return fmt.Errorf("%s: scope.%q: unknown profile", loc, k)
+				}
+			}
+		}
+		if mapped {
+			if _, ok := e.Scope[check.GatePush]; ok {
+				return fmt.Errorf("%s: scope.push conflicts with gate.push ci-profile %q; set scope.ci/%s or scope.ci instead", loc, gate.Push.CiProfile, gate.Push.CiProfile)
+			}
+		}
+	}
+	return nil
+}
+
+// collectV3Ledger reads the v3 root and all recursively included fragments.
+func collectV3Ledger(root string) ([]*v3FileData, v3GateConfig, error) {
+	rootPath := filepath.Join(root, InventoryFile)
+	realRoot, err := filepath.EvalSymlinks(rootPath)
+	if err != nil {
+		return nil, v3GateConfig{}, fmt.Errorf("%s: %w", InventoryFile, err)
+	}
+	visited := map[string]bool{realRoot: true}
+	stack := []includeFrame{{real: realRoot, display: InventoryFile}}
+	var files []*v3FileData
+	var gate v3GateConfig
+	var gateSet bool
+	seen := map[check.Key]string{}
+	var visit func(target, display string, isRoot bool, stack []includeFrame) error
+	visit = func(target, display string, isRoot bool, stack []includeFrame) error {
+		data, err := os.ReadFile(target)
+		if err != nil {
+			return fmt.Errorf("%s: %w", display, err)
+		}
+		var doc yaml.Node
+		dec := yaml.NewDecoder(bytes.NewReader(data))
+		if err := dec.Decode(&doc); err != nil {
+			if errors.Is(err, io.EOF) {
+				return fmt.Errorf("%s: empty file", display)
+			}
+			return fmt.Errorf("%s: %w", display, err)
+		}
+		var extra yaml.Node
+		if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+			return fmt.Errorf("%s: want exactly one YAML document", display)
+		}
+		fd := &v3FileData{rel: display, doc: doc, isRoot: isRoot, data: data}
+		if isRoot {
+			var raw v3Inventory
+			pdec := yaml.NewDecoder(bytes.NewReader(data))
+			pdec.KnownFields(true)
+			if err := pdec.Decode(&raw); err != nil {
+				return fmt.Errorf("%s: %w", display, err)
+			}
+			if raw.Version != 3 {
+				return fmt.Errorf("%s: version %d, want 3 for v3 migration", display, raw.Version)
+			}
+			if err := raw.Gate.validateV3(display); err != nil {
+				return err
+			}
+			gate, gateSet = raw.Gate, true
+			fd.verifications = raw.Verifications
+			fd.includes = raw.Includes
+			for i, e := range raw.Verifications {
+				k := e.Key()
+				loc := fmt.Sprintf("%s: verifications[%d]", display, i)
+				if prev, dup := seen[k]; dup {
+					return fmt.Errorf("duplicate verification %q: first %s, also %s", k, prev, loc)
+				}
+				seen[k] = loc
+			}
+		} else {
+			var frag v3Fragment
+			pdec := yaml.NewDecoder(bytes.NewReader(data))
+			pdec.KnownFields(true)
+			if err := pdec.Decode(&frag); err != nil {
+				return fmt.Errorf("%s: %w", display, err)
+			}
+			fd.verifications = frag.Verifications
+			fd.includes = frag.Includes
+			for i, e := range frag.Verifications {
+				k := e.Key()
+				loc := fmt.Sprintf("%s: verifications[%d]", display, i)
+				if prev, dup := seen[k]; dup {
+					return fmt.Errorf("duplicate verification %q: first %s, also %s", k, prev, loc)
+				}
+				seen[k] = loc
+			}
+		}
+		files = append(files, fd)
+		declDir := filepath.Dir(target)
+		for _, inc := range fd.includes {
+			next, err := ResolveInclude(declDir, display, inc)
+			if err != nil {
+				return err
+			}
+			real, err := filepath.EvalSymlinks(next)
+			if err != nil {
+				return fmt.Errorf("%s: include %q: %w", display, inc, err)
+			}
+			for _, s := range stack {
+				if s.real == real {
+					chain := make([]string, 0, len(stack)+1)
+					for _, f := range stack {
+						chain = append(chain, f.display)
+					}
+					chain = append(chain, relDisplay(root, next))
+					return fmt.Errorf("include cycle: %s", strings.Join(chain, " -> "))
+				}
+			}
+			if visited[real] {
+				continue
+			}
+			visited[real] = true
+			disp := relDisplay(root, next)
+			if err := visit(next, disp, false, append(stack, includeFrame{real: real, display: disp})); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := visit(rootPath, InventoryFile, true, stack); err != nil {
+		return nil, v3GateConfig{}, err
+	}
+	if !gateSet {
+		return nil, v3GateConfig{}, fmt.Errorf("%s: missing gate", InventoryFile)
+	}
+	return files, gate, nil
+}
+
+// mapKeyIndex finds a key in a mapping node.
+func mapKeyIndex(m *yaml.Node, key string) int {
+	if m == nil || m.Kind != yaml.MappingNode {
+		return -1
+	}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Kind == yaml.ScalarNode && m.Content[i].Value == key {
+			return i
+		}
+	}
+	return -1
+}
+
+func mapValue(m *yaml.Node, key string) *yaml.Node {
+	idx := mapKeyIndex(m, key)
+	if idx < 0 {
+		return nil
+	}
+	return m.Content[idx+1]
+}
+
+func mapRemoveKey(m *yaml.Node, key string) bool {
+	idx := mapKeyIndex(m, key)
+	if idx < 0 {
+		return false
+	}
+	m.Content = append(m.Content[:idx], m.Content[idx+2:]...)
+	return true
+}
+
+// rewriteV3Node visits only verification entries, their merge donors, and
+// their scope maps; vocabulary and other user mappings retain their keys.
+func rewriteV3Node(n *yaml.Node, rel string) (inverted, removed int, err error) {
+	seen := map[*yaml.Node]bool{}
+	var visit func(*yaml.Node, bool) error
+	visit = func(node *yaml.Node, scope bool) error {
+		if node == nil {
+			return nil
+		}
+		if node.Kind == yaml.AliasNode {
+			node = node.Alias
+		}
+		if seen[node] {
+			return nil
+		}
+		seen[node] = true
+		if node.Kind == yaml.SequenceNode {
+			for _, child := range node.Content {
+				if err := visit(child, scope); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		if node.Kind != yaml.MappingNode {
+			return nil
+		}
+		if scope && mapRemoveKey(node, "push") {
+			removed++
+		}
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			key, value := node.Content[i], node.Content[i+1]
+			switch {
+			case key.Value == "<<":
+				if err := visit(value, scope); err != nil {
+					return err
+				}
+			case !scope && key.Value == "scope":
+				if err := visit(value, true); err != nil {
+					return err
+				}
+			case !scope && key.Value == "skip-push":
+				var b bool
+				if err := value.Decode(&b); err != nil {
+					return fmt.Errorf("%s: skip-push: %w", rel, err)
+				}
+				key.Value = "push"
+				value.Tag, value.Value = "!!bool", strconv.FormatBool(!b)
+				inverted++
+			}
+		}
+		return nil
+	}
+	err = visit(n, false)
+	return
+}
+
+// migrateV3ToV4 rewrites every ledger file from v3 to v4.
+func migrateV3ToV4(root string, out io.Writer) error {
+	files, gate, err := collectV3Ledger(root)
+	if err != nil {
+		return err
+	}
+	for _, fd := range files {
+		if err := validateV3EntryScopes(fd.verifications, gate, fd.rel); err != nil {
+			return err
+		}
+	}
+	type mismatch struct {
+		key, oldScope, oldFrom, newScope, newFrom, loc string
+	}
+	var bad []mismatch
+	for _, fd := range files {
+		for i, e := range fd.verifications {
+			if e.SkipPush {
+				continue
+			}
+			oldScope, oldFrom := oldPushScope(gate, e)
+			newScope, newFrom := newPushScope(gate, e)
+			if oldScope != newScope {
+				loc := fmt.Sprintf("%s: verifications[%d]", fd.rel, i)
+				bad = append(bad, mismatch{key: e.Key().String(), oldScope: string(oldScope), oldFrom: oldFrom, newScope: string(newScope), newFrom: newFrom, loc: loc})
+			}
+		}
+	}
+	if len(bad) > 0 {
+		sort.Slice(bad, func(i, j int) bool { return bad[i].key < bad[j].key })
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "%s: push scope would change for %d verification(s); adjust gate.ci scope/profile then retry, leaving all files unchanged:\n", InventoryFile, len(bad))
+		for _, m := range bad {
+			fmt.Fprintf(&sb, "  - %s (%s): was %s from %s, would be %s from %s\n", m.key, m.loc, m.oldScope, m.oldFrom, m.newScope, m.newFrom)
+		}
+		return errors.New(strings.TrimSuffix(sb.String(), "\n"))
+	}
+	total, inverted, scopes := 0, 0, 0
+	for _, fd := range files {
+		if len(fd.doc.Content) != 1 || fd.doc.Content[0].Kind != yaml.MappingNode {
+			return fmt.Errorf("%s: want a mapping", fd.rel)
+		}
+		top := fd.doc.Content[0]
+		if fd.isRoot {
+			idx := mapKeyIndex(top, "version")
+			if idx < 0 {
+				return fmt.Errorf("%s: missing version", fd.rel)
+			}
+			top.Content[idx+1].Value = "4"
+			top.Content[idx+1].Tag = "!!int"
+			gateNode := mapValue(top, "gate")
+			if gateNode == nil || gateNode.Kind != yaml.MappingNode {
+				return fmt.Errorf("%s: missing gate", fd.rel)
+			}
+			pushNode := mapValue(gateNode, "push")
+			if pushNode == nil || pushNode.Kind != yaml.MappingNode {
+				return fmt.Errorf("%s: missing gate.push", fd.rel)
+			}
+			if mapRemoveKey(pushNode, "scope") {
+				scopes++
+			}
+		}
+		total += len(fd.verifications)
+		expandScalarAliases(&fd.doc)
+		iv, rm, err := rewriteV3Node(mapValue(top, "verifications"), fd.rel)
+		if err != nil {
+			return err
+		}
+		inverted += iv
+		scopes += rm
+	}
+	for _, fd := range files {
+		var buf bytes.Buffer
+		enc := yaml.NewEncoder(&buf)
+		if err := enc.Encode(&fd.doc); err != nil {
+			enc.Close()
+			return fmt.Errorf("%s: migrate: %w", fd.rel, err)
+		}
+		if err := enc.Close(); err != nil {
+			return fmt.Errorf("%s: migrate: %w", fd.rel, err)
+		}
+		fd.transformed = buf.Bytes()
+	}
+	tmp, err := os.MkdirTemp("", "ytif-migrate-v4-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	for _, fd := range files {
+		dest := filepath.Join(tmp, filepath.FromSlash(fd.rel))
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(dest, fd.transformed, 0o644); err != nil {
+			return err
+		}
+	}
+	if _, err := LoadInventory(tmp); err != nil {
+		return fmt.Errorf("migrated output failed to load: %w; expand YAML merges and aliases and retry", err)
+	}
+	var written []*v3FileData
+	for _, fd := range files {
+		target := filepath.Join(root, filepath.FromSlash(fd.rel))
+		if err := os.WriteFile(target, fd.transformed, 0o644); err != nil {
+			for _, prev := range written {
+				pp := filepath.Join(root, filepath.FromSlash(prev.rel))
+				_ = os.WriteFile(pp, prev.data, 0o644)
+			}
+			return fmt.Errorf("%s: %w", fd.rel, err)
+		}
+		written = append(written, fd)
+	}
+	fmt.Fprintf(out, "migrated %s: version 3 -> 4: %d verifications (%d push inverted, %d scope.push removed)\n", InventoryFile, total, inverted, scopes)
+	return nil
+}
+
+// expandScalarAliases preserves the original value at consumers before a
+// membership scalar anchor is inverted.
+func expandScalarAliases(n *yaml.Node) {
+	if n.Kind == yaml.AliasNode && n.Alias.Kind == yaml.ScalarNode {
+		copy := *n.Alias
+		copy.Anchor = ""
+		*n = copy
+	}
+	for _, child := range n.Content {
+		expandScalarAliases(child)
+	}
 }

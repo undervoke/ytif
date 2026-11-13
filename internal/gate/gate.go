@@ -146,6 +146,8 @@ func Run(ctx context.Context, root string, o Options) int {
 		for _, k := range selected {
 			s.Active[k.Runner] = true
 		}
+		// Full discovery stays CI-only: an all-full push must not
+		// activate every source.
 		if o.Gate == check.GateCI && fullCensus(plans, policy.Scope) {
 			for r := range s.Owner {
 				s.Active[r] = true
@@ -167,11 +169,12 @@ func Run(ctx context.Context, root string, o Options) int {
 		if wanted[e.Key()] {
 			continue
 		}
+		// Omission reasons come from the resolved plan or the generic
+		// non-membership; membership itself is the resolved Member bit,
+		// never a raw ledger flag.
 		reason := "not-in-gate"
-		if p := plans[e.Key()]; p != nil {
+		if p := plans[e.Key()]; p != nil && p.Reason != "" {
 			reason = p.Reason
-		} else if o.Gate == check.GatePush && e.SkipPush {
-			reason = "skip-push"
 		}
 		selection.Omissions = append(selection.Omissions, record.Omission{Key: e.Key().String(), Reason: reason})
 	}
@@ -206,7 +209,8 @@ func Run(ctx context.Context, root string, o Options) int {
 		}
 	}
 	findings := s.Findings()
-	exit := present(o, run, findings)
+	emptyPush := o.Gate == check.GatePush && len(plans) == 0
+	exit := present(o, run, findings, emptyPush)
 	if len(s.Admission) > 0 {
 		exit = ExitUsage
 	}
@@ -216,6 +220,10 @@ func Run(ctx context.Context, root string, o Options) int {
 		fmt.Fprintf(o.Stdout, "ytif %s: interrupted; unfinished outcomes are not recorded\n", o.Gate)
 		exit = ExitFail
 	}
+	// An empty push runs nothing: needsComparison is false so the snapshot
+	// fetched nothing, and empty Active keeps prepare/discover cheap.
+	// Report it as not executed rather than a passing verification.
+	emptySkipped := emptyPush && exit == ExitPass && len(findings) == 0 && len(s.Admission) == 0 && ctx.Err() == nil
 	selection.Completed = ctx.Err() == nil && len(s.Admission) == 0
 	if !o.Record {
 		return exit
@@ -234,6 +242,9 @@ func Run(ctx context.Context, root string, o Options) int {
 	status := "pass"
 	if exit != ExitPass {
 		status = "fail"
+	} else if emptySkipped {
+		// Skipped, not pass: no verification ran, so nothing passed.
+		status = "skipped"
 	}
 	lines = append(lines, record.Line{Time: now, Attempt: attempt, Kind: record.KindSelection, Gate: o.Gate, Scope: in.Scope, Outcome: status, Selection: &selection})
 	if err := writeRecords(root, o.Records, lines, o.Stderr); err != nil {

@@ -292,14 +292,26 @@ func basisOf(comps []component) []string {
 	return out
 }
 
-// priceGate estimates a direct ytif commit, push, or ci command. A process
-// unit counts only when every key registered under it runs at the gate with
-// full scope; a key counts from its own result. Serial sources sum into one
+// priceGate estimates a direct ytif commit, push, or ci command. Membership
+// is the resolved Member bit; a process unit counts only when every key
+// registered under it runs at the gate with full scope, and a key counts
+// from its own result. An empty gate has no price, so historical evidence
+// from other gates never prices an empty push. Serial sources sum into one
 // component each, direct commands stay independent, and a runner whose
 // records cannot be matched to a gate invocation is left out.
 func priceGate(c shellcmd.Command, gateName string, rd *repoData) (durationDecision, bool) {
 	profile := literalFlag(c, "--profile")
 	if hasNonLiteralFlag(c, "--profile") {
+		return durationDecision{}, false
+	}
+	hasMember := false
+	for _, e := range rd.inv.Verifications {
+		if e.Member(gateName) {
+			hasMember = true
+			break
+		}
+	}
+	if !hasMember {
 		return durationDecision{}, false
 	}
 	workers, knownWorkers := gateWorkers(c, rd.root)

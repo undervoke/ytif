@@ -619,10 +619,10 @@ func read(root, rel string) ([]byte, bool, error) {
 func ledgerText() string {
 	d := inventory.BoardConfig{}.Settings()
 	a := d.Average
-	return fmt.Sprintf(`version: 3
+	return fmt.Sprintf(`version: 4
 gate:
   commit: {scope: file}
-  push: {scope: full}
+  push: {default: include}
   ci: {scope: full}
 guard:
   limit: 2m
@@ -699,6 +699,12 @@ func ledger(root string) ([]file, error) {
 		return nil, fmt.Errorf("%s: want a mapping", rel)
 	}
 	top := doc.Content[0]
+	// A version 3 ledger keeps its push scope semantics only through
+	// migration: init never rewrites scope.push or gate.push.scope into the
+	// v4 CI-shared policy, so hand those ledgers to migrate instead.
+	if v := ledgerVersion(top); v != 0 && v != 4 {
+		return nil, fmt.Errorf("%s: version %d is not a version 4 ledger; run ytif migrate to convert it to %s", rel, v, rel)
+	}
 	dirtyRemove, err := stripCheckRoot(top)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", rel, err)
@@ -987,7 +993,21 @@ func stripCheckFragment(top *yaml.Node) (bool, error) {
 	return stripVerifications(top)
 }
 
-// fillGate adds a missing gate and missing scopes. It never overwrites a user value.
+// ledgerVersion reads the ledger's version field: 0 when absent or unreadable,
+// so the loader still reports those ledgers instead of init guessing.
+func ledgerVersion(top *yaml.Node) int {
+	v := lookup(top, "version")
+	if v == nil || v.Kind != yaml.ScalarNode {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v.Value))
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// fillGate adds a missing gate and missing policy. It never overwrites a user value.
 func fillGate(top *yaml.Node) (bool, error) {
 	if err := editable(top, "the top level"); err != nil {
 		return false, err
@@ -1033,9 +1053,8 @@ func fillGate(top *yaml.Node) (bool, error) {
 				dirty = true
 			}
 		case "push":
-			hasScope, hasProfile := lookup(sub, "scope") != nil, lookup(sub, "ci-profile") != nil
-			if !hasScope && !hasProfile {
-				sub.Content = append(sub.Content, str("scope"), str("full"))
+			if lookup(sub, "default") == nil {
+				sub.Content = append(sub.Content, str("default"), str("include"))
 				dirty = true
 			}
 		case "ci":
@@ -1091,8 +1110,14 @@ func defaultGateNode() *yaml.Node {
 	}}
 }
 
-// defaultGateEntry is one init gate entry.
+// defaultGateEntry is one init gate entry: push carries the default push
+// membership, commit and ci carry their scope.
 func defaultGateEntry(name string) *yaml.Node {
+	if name == "push" {
+		return &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
+			str("default"), str("include"),
+		}}
+	}
 	scope := "full"
 	if name == "commit" {
 		scope = "file"

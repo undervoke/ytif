@@ -32,7 +32,7 @@ const usageText = `usage: ytif <command> [flags]
 
 gates:
   commit                 run verifications enabled at commit
-  push                   run verifications except skip-push
+  push                   run verifications selected for push
   ci                     run all verifications
 
 other:

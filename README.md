@@ -27,7 +27,15 @@ keep recording.
 
 To upgrade a project whose ledger is a version 2 `ytif-inventory.yaml`, raise
 the pin and run `ytif migrate`. It lists the verifications that now also run
-at push; add `skip-push: true` where push must not run them.
+at push; add `push: false` where push must not run them.
+
+To upgrade a version 3 `ytif-verifications.yaml`, raise the pin and run
+`ytif migrate`. It inverts every explicit `skip-push` boolean (`true` becomes
+`push: false`, `false` becomes `push: true`, including through merge keys)
+and diffs each included entry's effective v3 push scope against the v4 CI
+scope; where they differ, match the CI policy to the push scope you want
+before migrating. A version 3 ledger otherwise fails to load, and `ytif init`
+never converts it silently.
 
 When upgrading from v0.15.0, run `ytif init` after raising the pin, using the
 same host selection as before. It removes the retired `check` settings from
@@ -139,10 +147,10 @@ only an uncached target's statically resolved single-command body can be priced.
 fragments under its own directory:
 
 ```yaml
-version: 3
+version: 4
 gate:
   commit: {scope: file}
-  push: {scope: full}          # or {ci-profile: NAME} to preview that profile's CI selection
+  push: {default: include}   # or {default: exclude} with per-entry push: true; ci-profile: NAME previews that profile's CI selection
   ci:
     scope: full
     profiles:
@@ -172,10 +180,12 @@ verifications:
   - runner: command
     name: formatting
     run: [pnpm, exec, prettier, --list-different, .]
+    push: false              # leave push out while CI still runs it
 ```
 
-`commit` and `skip-push` set the gates an entry belongs to; see
-[Gates](#gates).
+`commit: true` opts an entry into the commit gate; `push` decides the push
+gate in three states — omitted inherits `gate.push.default`, `true` includes,
+`false` excludes. Every entry belongs to CI; see [Gates](#gates).
 
 A discovered verification's contract has four fields: `accident`, an ordinary
 unintended change it catches; `detection`, what it runs so that the accident
@@ -203,7 +213,9 @@ verifications:
 
 Anchors are local to one YAML file. Setting `tags` or `scope` on a member replaces
 that whole inherited value; it does not extend it. Keep per-member `unit`,
-`commit`, and `scope` outside the shared mapping. `ytif init` leaves these
+`commit`, `push`, and `scope` outside the shared mapping, with explicit `push`
+values written out so a later default change cannot reinterpret them.
+`ytif init` leaves these
 merge-keyed verification entries intact when they have no retired `check` fields
 to remove.
 
@@ -223,13 +235,13 @@ this one depends on or keeps working.
 
 ## Gates
 
-| Command | Runs | Scope written by init |
+| Command | Runs | Policy written by init |
 |---|---|---|
-| `ytif commit` | `commit: true` | `file` |
-| `ytif push` | every verification unless `skip-push: true` | `full`, or one CI profile when mapped |
-| `ytif ci [--profile NAME]` | every verification | `full` |
+| `ytif commit` | `commit: true` | `scope: file` |
+| `ytif push` | `gate.push.default` unless the entry sets `push` | `default: include`, plus the CI scope or one CI profile when mapped |
+| `ytif ci [--profile NAME]` | every verification | `scope: full` |
 
-Every gate runs on the current working tree. The ledger's `gate:` section is required and sets how much of each member runs: `file` requests changed-file targeting, `affected` skips it when Nx places it in an unaffected project, and `full` runs its registered invocation unchanged. An `nx-target` entry is instead skipped when Nx reports its own target's task unaffected: from task inputs when Nx selects affected tasks (Nx 24 unless `affected.legacy` is set), otherwise from its project. An entry whose target the graph no longer has runs full. A ledger without `gate:` fails to load; `ytif init` writes the values above and fills missing gate settings while preserving existing ledger settings. `ytif init` also writes a missing `guard: {limit: 2m}` and fills a missing guard limit the same way. <!-- dinyd: internal/initcmd/initcmd.go#fillGate s1:d998944357315ed4 --> <!-- dinyd: internal/initcmd/initcmd.go#ledgerText s1:9afbf1fd266bb5e7 -->
+Every gate runs on the current working tree. The ledger's `gate:` section is required and sets how much of each member runs: `file` requests changed-file targeting, `affected` skips it when Nx places it in an unaffected project, and `full` runs its registered invocation unchanged. Push previews CI: included entries resolve the CI scope chain (entry `ci/<profile>`, then entry `ci`, then the mapped profile or gate `ci` scope), so push and CI test the same thing while keeping their own comparisons and records. An `nx-target` entry is instead skipped when Nx reports its own target's task unaffected: from task inputs when Nx selects affected tasks (Nx 24 unless `affected.legacy` is set), otherwise from its project. An entry whose target the graph no longer has runs full. A ledger without `gate:` fails to load; `ytif init` writes the values above and fills a missing push default or gate scope while preserving existing ledger settings, and never recreates the retired push scope. `ytif init` also writes a missing `guard: {limit: 2m}` and fills a missing guard limit the same way. <!-- dinyd: internal/initcmd/initcmd.go#fillGate s1:341041109accc90d --> <!-- dinyd: internal/initcmd/initcmd.go#ledgerText s1:77aa44c74ab96112 -->
 
 A gate runs at most `--jobs N` processes at once, else `git config ytif.jobs`,
 else 4. The limit counts processes, not the workers a tool starts inside one.
@@ -249,9 +261,9 @@ verifications:
     scope: {ci: full}
 ```
 
-The most specific scope wins: for `ci` and a mapped push, entry `ci/<profile>`, then entry `ci`, then the profile, then gate `ci`; for commit and an unmapped push, the entry scope, then the gate scope. Membership still decides which verifications a gate runs; scope decides only how much of each one runs. <!-- dinyd: internal/inventory/gate.go#GateContext.Resolve s1:0476e67848eb9527 -->
+The most specific scope wins: for `ci` and every push, entry `ci/<profile>`, then entry `ci`, then the mapped profile, then gate `ci`; for commit, the entry scope, then the gate scope. Membership still decides which verifications a gate runs; scope decides only how much of each one runs. <!-- dinyd: internal/inventory/gate.go#GateContext.Resolve s1:f41d4531ab5dda75 -->
 
-`--base`, `--head`, and `--target-branch` only choose the comparison; scope comes from the ledger. Commit compares HEAD to staged paths, push compares each pushed tip to its merge base with the mapped profile's target, and pull-request CI compares the merge base of the event's base and head to the PR head while recording the execution HEAD separately. A push needing comparison fetches its target once into a ytif-owned ref; when pushed tips differ from the working tree, narrowed verifications run full because the result describes the working tree. Without a usable comparison — no target, no history, or a failed fetch — narrowed plans run full and record why, as does any narrowing that cannot be established. CI outside a PR uses explicit comparison inputs or the profile's locally available target ref; a post-merge run whose target equals HEAD compares nothing, so keep that profile full or pass an explicit comparison that names the intended range.
+`--base`, `--head`, and `--target-branch` only choose the comparison; scope comes from the ledger. Commit compares HEAD to staged paths, push compares each pushed tip to its merge base with the profile target (`gate.push.ci-profile`, or `--base` for one invocation), and pull-request CI compares the merge base of the event's base and head to the PR head while recording the execution HEAD separately. A push needing comparison fetches its target once into a ytif-owned ref; when pushed tips differ from the working tree, narrowed verifications run full because the result describes the working tree. Without a usable comparison — no target, no history, or a failed fetch — narrowed plans run full and record why, as does any narrowing that cannot be established. CI outside a PR uses explicit comparison inputs or the profile's locally available target ref; a post-merge run whose target equals HEAD compares nothing, so keep that profile full or pass an explicit comparison that names the intended range.
 
 Native file targeting supports ESLint 10, direct or via `pnpm exec eslint`, with literal file/directory operands and simple JavaScript configs. Local dependencies must be static relative imports or literal `require` of regular, exact-case `.js`, `.mjs`, or `.cjs` files inside the repository. Node builtins and packages whose real paths remain under `node_modules` are treated as installed dependencies, including their exported subpaths. Workspace or unresolved package imports, directory imports, TS configs, URL references, symlinked or differently cased config/helper/domain paths, and other unmodeled forms run the original full invocation with a reason. <!-- dinyd: internal/targeting/targeting.go#plan s1:71b5d6aeaf8cd540 -->
 Config, ignore, manifest, and lockfile changes anywhere in the repository widen to full, as do changes to tracked relative helpers; this deliberately trades some extra runs for avoiding Node module-resolution rules. Otherwise, changed existing files inside the operands are passed after `--` with `--no-warn-ignored`, and a valid empty set skips. Explicit file operands need an existing `--no-warn-ignored` to preserve their original warning behavior. File scope provides selected-file feedback, not proof of rule locality: arbitrary cross-file dependencies and runtime file reads remain outside the static model.
@@ -342,7 +354,7 @@ credentials, a network, or any artifact, the page renders the cached records
 and names on the source line why the sync stopped.
 
 A gate's time is the sum of its current members' means. <!-- dinyd: internal/board/board.go#summarize s1:824cf197241d735e -->
-Each mean weights the last N timed results of that verification at that gate toward the newest: a result's weight halves every `half_life_percent` percent of N, so one value gives every gate the same shape. <!-- dinyd: internal/board/board.go#aggregate s1:3325f4ee969cfe77 --> <!-- dinyd: internal/board/board.go#meansOf s1:34b753e0c61efa15 --> <!-- dinyd: internal/board/board.go#build s1:4fee2e9f071b433f -->
+Each mean weights the last N timed results of that verification at that gate toward the newest: a result's weight halves every `half_life_percent` percent of N, so one value gives every gate the same shape. <!-- dinyd: internal/board/board.go#aggregate s1:3325f4ee969cfe77 --> <!-- dinyd: internal/board/board.go#meansOf s1:34b753e0c61efa15 --> <!-- dinyd: internal/board/board.go#build s1:bbb74c5b447b715b -->
 A fail counts as one hit; later fails of that verification at that gate count again only after a pass. <!-- dinyd: internal/record/hits.go#Hits s1:d5b7e4a02af8b181 -->
 Hits are counted over the last `days` days, with an optional latest-attempt limit per gate. <!-- dinyd: internal/board/board.go#window s1:374dbfd9604443da -->
 Only the root ledger sets the windows:
@@ -362,7 +374,7 @@ An omitted value keeps the default: 100 timed results per gate, 10 for ci, a hal
 `hits.last` counts a gate's hits only in its latest N attempts; leave it out to count every attempt inside the days.
 `recent_fail_days` is how far back a fail marks a verification as recently failed. <!-- dinyd: internal/board/board.go#flags s1:0e0a093f81108c3b -->
 `scales` lists the time bars' ticks in milliseconds, each interval taking an equal width: `verification` draws single verifications, `unit` draws unit, file, and process totals, and the verification page's execution-unit rows extend `verification` tenfold until their largest total fits. <!-- dinyd: internal/inventory/inventory.go#Scales s1:8e1feca08d139295 -->
-A ledger `ytif init` creates lists these keys and their defaults as a comment. <!-- dinyd: internal/initcmd/initcmd.go#ledgerText s1:9afbf1fd266bb5e7 -->
+A ledger `ytif init` creates lists these keys and their defaults as a comment. <!-- dinyd: internal/initcmd/initcmd.go#ledgerText s1:77aa44c74ab96112 -->
 
 ## Agent guard
 

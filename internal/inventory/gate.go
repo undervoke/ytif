@@ -35,10 +35,20 @@ type GateScope struct {
 	Scope check.TargetScope `yaml:"scope"`
 }
 
-// PushScope is push policy: a local scope or a mapped CI profile.
+// PushScope is push policy: default membership plus an optional CI profile
+// whose scope and target the push previews. Omitted default means include,
+// so a ledger without push defaults keeps today's include-by-default
+// membership. Default and ci-profile are orthogonal: default decides which
+// entries belong to push, ci-profile decides which CI scope and target the
+// included entries use.
 type PushScope struct {
-	Scope     *check.TargetScope `yaml:"scope,omitempty"`
-	CiProfile string             `yaml:"ci-profile,omitempty"`
+	Default   string `yaml:"default,omitempty"`
+	CiProfile string `yaml:"ci-profile,omitempty"`
+}
+
+// includeByDefault reports whether omitted or include default includes entries.
+func (p PushScope) includeByDefault() bool {
+	return p.Default == "" || p.Default == "include"
 }
 
 // GateConfig is the mandatory root gate. Fragments must not declare it.
@@ -97,15 +107,10 @@ func (g GateConfig) validate(display string) error {
 	if err := requireGateScope(display, "gate.ci.scope", g.CI.Scope); err != nil {
 		return err
 	}
-	hasScope := g.Push.Scope != nil
-	hasProfile := g.Push.CiProfile != ""
-	switch {
-	case hasScope && hasProfile:
-		return fmt.Errorf("%s: gate.push: set exactly one of scope or ci-profile, have both; a push mapped to a profile inherits that profile, so set scope.ci/<profile> instead of scope.push", display)
-	case !hasScope && !hasProfile:
-		return fmt.Errorf("%s: gate.push: set exactly one of scope or ci-profile; run ytif init to fill missing gate defaults", display)
-	case hasScope && !g.Push.Scope.Valid():
-		return fmt.Errorf("%s: gate.push.scope %q: want file, affected or full", display, string(*g.Push.Scope))
+	switch g.Push.Default {
+	case "", "include", "exclude":
+	default:
+		return fmt.Errorf("%s: gate.push.default %q: want include or exclude", display, g.Push.Default)
 	}
 	names := g.sortedProfileNames()
 	for _, name := range names {
@@ -125,7 +130,7 @@ func (g GateConfig) validate(display string) error {
 			}
 		}
 	}
-	if hasProfile {
+	if g.Push.CiProfile != "" {
 		if _, ok := g.CI.Profiles[g.Push.CiProfile]; !ok {
 			if len(names) == 0 {
 				return fmt.Errorf("%s: gate.push ci-profile %q: unknown profile; define it under gate.ci.profiles", display, g.Push.CiProfile)
@@ -142,7 +147,6 @@ func validateEntryScopes(entries []Entry, gate GateConfig, display string) error
 	for name := range gate.CI.Profiles {
 		profiles[name] = true
 	}
-	mapped := gate.Push.CiProfile != ""
 	for _, e := range entries {
 		loc := e.Origin
 		if loc == "" {
@@ -159,11 +163,11 @@ func validateEntryScopes(entries []Entry, gate GateConfig, display string) error
 				return fmt.Errorf("%s: scope.%s %q: want file, affected or full", loc, k, string(v))
 			}
 			switch k {
-			case check.GateCommit, check.GatePush, check.GateCI:
+			case check.GateCommit, check.GateCI:
 			default:
 				name, ok := strings.CutPrefix(k, check.GateCI+"/")
 				if !ok || name == "" {
-					return fmt.Errorf("%s: scope.%q: unknown scope, want commit, push, ci or ci/<profile>", loc, k)
+					return fmt.Errorf("%s: scope.%q: unknown scope, want commit, ci or ci/<profile>", loc, k)
 				}
 				if !profiles[name] {
 					if len(profiles) == 0 {
@@ -171,11 +175,6 @@ func validateEntryScopes(entries []Entry, gate GateConfig, display string) error
 					}
 					return fmt.Errorf("%s: scope.%q: unknown profile, want one of %s", loc, k, strings.Join(gate.sortedProfileNames(), ", "))
 				}
-			}
-		}
-		if mapped {
-			if _, ok := e.Scope[check.GatePush]; ok {
-				return fmt.Errorf("%s: scope.push conflicts with gate.push ci-profile %q; set scope.ci/%s or scope.ci instead", loc, gate.Push.CiProfile, gate.Push.CiProfile)
 			}
 		}
 	}
@@ -198,7 +197,7 @@ func (g GateConfig) Context(gate, profile string) (GateContext, error) {
 			scope, from, target := g.profileScope(g.Push.CiProfile)
 			return GateContext{Profile: g.Push.CiProfile, Scope: scope, Target: target, from: from}, nil
 		}
-		return GateContext{Scope: *g.Push.Scope, from: "gate"}, nil
+		return GateContext{Scope: g.CI.Scope, from: "gate"}, nil
 	case check.GateCI:
 		if profile == "" {
 			return GateContext{Scope: g.CI.Scope, from: "gate"}, nil
@@ -212,9 +211,13 @@ func (g GateConfig) Context(gate, profile string) (GateContext, error) {
 	return GateContext{}, fmt.Errorf("unknown gate %q", gate)
 }
 
-// Resolve applies entry overrides: ci/<profile>, then ci, then the context.
+// Resolve applies entry overrides. Push always resolves the CI override
+// chain, even without a mapped profile: ci/<profile>, then ci, then the
+// context (profile scope or common CI scope). Comparison-target fallback
+// (no-target widening to full) lives outside inventory in gitx/plans and is
+// unchanged.
 func (c GateContext) Resolve(e Entry, gate string) (check.TargetScope, string) {
-	if gate == check.GateCI || (gate == check.GatePush && c.Profile != "") {
+	if gate == check.GateCI || gate == check.GatePush {
 		if c.Profile != "" {
 			if s, ok := e.Scope[check.GateCI+"/"+c.Profile]; ok {
 				return s, "entry"

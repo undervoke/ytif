@@ -13,7 +13,7 @@ config:
     wrappingWidth: 270
 ---
 %% Behavior authority: internal/gate/gate.go (Run), internal/gate/survey.go, internal/gate/plans.go and README.md (Gates).
-%% dinyd: internal/gate/gate.go#Run s1:ceee52ca93948e8e
+%% dinyd: internal/gate/gate.go#Run s1:61124ce55a262e0b
 %% Invalid input exits before record creation. Admission findings reconcile and finish as an incomplete failed attempt, recorded when enabled.
 %% The mandatory gate policy plans every member; narrowing that cannot be resolved widens to full with a reason. A valid empty selection skips without fallback.
 %% list uses complete discovery separately. A gate run activates only sources owning runnable selections; effective-full CI activates every source.
@@ -22,8 +22,8 @@ flowchart TB
   Input["Validate configuration and revisions<br/><small>Admission runs before project execution</small>"]
   Invalid["Report input or load error<br/><small>No records are written</small>"]
   Rejected["Reconcile admission findings<br/><small>No Nx, preparation, discovery or execution</small>"]
-  Members["Gate members<br/><small>• commit opts in independently<br/>• push includes all except skip-push<br/>• CI includes all verifications</small>"]
-  %% dinyd: internal/inventory/inventory.go#Entry.Member s1:a79110385049fe4e
+  Members["Gate members<br/><small>• commit opts in independently<br/>• push follows its default unless the entry chooses<br/>• CI includes all verifications</small>"]
+  %% dinyd: internal/inventory/inventory.go#Entry.Member s1:b6dbb96444a8510c
   Plans["Per-key plans from the mandatory policy<br/><small>• Most specific scope wins; full keeps the registered invocation</small>"]
   Outcomes["Resolve each plan against the comparison<br/><small>• Run full, run narrowed, or skip<br/>• Unresolvable narrowing widens to full with a reason</small>"]
   Census{"Effective-full CI?<br/><small>Every plan runs full</small>"}

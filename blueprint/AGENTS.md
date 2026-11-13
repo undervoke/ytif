@@ -32,12 +32,18 @@ The board combines the current registry with the local records and the cached CI
 ## gate scope
 
 The `gate:` section is required; a ledger without it fails to load, and `ytif init` adds the missing gate with init defaults.
+A version 3 ledger is converted by migration, never by init.
+Push membership defaults to include and can default to exclude instead, with each entry overriding the default by an explicit choice.
+An omitted entry choice inherits the push default, so an explicit choice survives a later default change.
+Commit membership stays an independent opt-in, and every verification stays a CI member.
 A gate runs each member at one of three scopes: file runs it on changed files only, affected skips it when the build tool's affected graph leaves its project out, and full runs its registered invocation unchanged.
-The most specific scope wins: `ci` and a mapped push prefer entry `ci/<profile>`, then entry `ci`, then the profile, then gate `ci`; commit and an unmapped push prefer the entry scope, then the gate scope.
+The most specific scope wins: `ci` and every push prefer entry `ci/<profile>`, then entry `ci`, then the mapped profile, then gate `ci`; commit prefers the entry scope, then the gate scope.
 Membership still decides which verifications a gate runs; scope decides only how much of each one runs.
-Push maps to one CI profile's scope and target, so a push previews that profile's CI selection against the same target branch.
+A push previews one CI scope and target: the common CI policy, or the named profile when `ci-profile` selects one.
+The push default and the CI profile are independent: the default decides which entries belong to push, the profile decides which CI scope and target the included entries use.
 File scope applies only where ytif can name the files a verification reads; elsewhere it falls back to affected, and affected falls back to full where the build tool's graph does not map the verification.
-Narrowing that cannot be established widens to full and records why; invalid configuration or context fails instead.
+Narrowing that cannot be established widens to full and records why; a push without a usable comparison target widens the same way.
+Invalid configuration or context fails instead.
 A verification that selects its own work from the comparison receives the resolved scope, but its actual scope stays unknown unless it reports one.
 
 @import "gate-scope.mermaid"
@@ -47,7 +53,7 @@ The changes a gate compares choose targets; every verification still reads the c
 | Gate | Changes compared | Code that runs |
 |---|---|---|
 | commit | HEAD → staged paths | Working tree |
-| push | Merge base of the profile target and each pushed tip → that tip | Working tree |
+| push | Merge base of the selected CI profile target and each pushed tip → that tip | Working tree |
 | ci, pull request | Merge base of the PR base and head → PR head | The host's checkout, usually the PR merge |
 
 When comparison is needed, push fetches its profile's target once into a ytif-owned ref, so the comparison does not depend on when the user last fetched.

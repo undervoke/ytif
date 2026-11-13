@@ -116,8 +116,7 @@ type verificationOut struct {
 	Unit       string             `json:"unit"`
 	Name       string             `json:"name"`
 	Commit     bool               `json:"commit"`
-	SkipPush   bool               `json:"skip_push"`
-	Gates      []string           `json:"gates"` // member gates in gateOrder
+	Gates      []string           `json:"gates"` // resolved member gates in gateOrder
 	IsCommand  bool               `json:"is_command"`
 	Run        []string           `json:"run,omitempty"`
 	Cwd        string             `json:"cwd,omitempty"`
@@ -298,7 +297,7 @@ func build(repo string, inv inventory.Inventory, src Sources, now time.Time) boa
 		}
 		d.Verifications = append(d.Verifications, verificationOut{
 			Key: k, Runner: e.Runner, Unit: e.Key().Unit, Name: e.Name,
-			Commit: e.Commit, SkipPush: e.SkipPush, Gates: gates,
+			Commit: e.Commit, Gates: gates,
 			IsCommand: e.Runner == inventory.CommandRunner,
 			Run:       append([]string(nil), e.Run...),
 			Cwd:       e.Cwd, Exclusive: append([]string(nil), e.Exclusive...),

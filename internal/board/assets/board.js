@@ -42,7 +42,7 @@ const T = {
     gates: "Gates", hitGroup: "Hit", hitYes: "yes", hitNo: "no",
     avgGroup: "Average sum", atLeast: v => `≥ ${v}`,
     stateGroup: "State", stateNoSample: "no time samples", stateBranch: "ran on this branch", stateFail: `failed in the last ${CRITERIA.recent_fail_days} days`,
-    membershipNote: "Every verification belongs to CI and, unless skip-push, to push. commit is an independent opt-in.",
+    membershipNote: "Every verification belongs to CI. Commit and push membership are per verification.",
     colImpact: "Impact · verification", colUnit: "Execution unit", colWhat: "Task · runner · unit", colAvg: "Average sum",
     more: (k, r) => `${k} more · ${r} left`,
     noMatch: "No verification matches.", noVerifications: "The ledger has no verifications.",
@@ -77,7 +77,7 @@ const T = {
     vocabLede: "A tag name is unique across groups, so a tag alone names its group. Every project shares the ytif built-in vocabulary; a project declares its own groups under vocabulary at the top of ytif-verifications.yaml. Select a count to list those verifications.",
     colGroup: "Group", colRule: "Per verification", colTag: "Tag", colLabel: "Label", colOwner: "Owner", colUses: "Uses",
     ruleMany: "Any number", ruleOne: "Exactly one", ownYtif: "ytif built-in", ownProject: "Project",
-    when: "When", whenSub: "Member of", whenText: "Not a tag: gate membership (commit is an opt-in; every verification belongs to CI and, unless skip-push, to push).",
+    when: "When", whenSub: "Member of", whenText: "Not a tag: gate membership (every verification belongs to CI; commit and push are per verification).",
   },
   ko: {
     tabVerifications: "검증", tabDiagram: "다이어그램", tabVocab: "어휘표", langName: "한국어", language: "언어",
@@ -107,7 +107,7 @@ const T = {
     gates: "gate", hitGroup: "hit", hitYes: "있음", hitNo: "없음",
     avgGroup: "평균 합", atLeast: v => `${v} 이상`,
     stateGroup: "상태", stateNoSample: "시간 표본 없음", stateBranch: "이 branch에서 실행됨", stateFail: `최근 ${CRITERIA.recent_fail_days}일 fail`,
-    membershipNote: "모든 검증은 CI에 속하고, skip-push가 아니면 push에도 속합니다. commit은 따로 지정합니다.",
+    membershipNote: "모든 검증은 CI에 속합니다. commit과 push 소속은 검증마다 정합니다.",
     colImpact: "영향 · 검증", colUnit: "실행 단위", colWhat: "작업 · runner · 실행 단위", colAvg: "평균 합",
     more: (k, r) => `${k}개 더 보기 · ${r}개 남음`,
     noMatch: "조건에 맞는 검증이 없습니다.", noVerifications: "ledger에 검증이 없습니다.",
@@ -142,7 +142,7 @@ const T = {
     vocabLede: "태그 이름은 묶음이 달라도 겹치지 않아서, 태그 하나로 묶음이 정해집니다. ytif 내장 어휘는 모든 프로젝트가 같이 쓰고, 프로젝트 어휘는 ytif-verifications.yaml 맨 위 vocabulary에 선언합니다. 사용 수를 누르면 그 태그로 걸러진 검증 목록으로 갑니다.",
     colGroup: "묶음", colRule: "검증마다", colTag: "태그", colLabel: "표시", colOwner: "소유", colUses: "사용 수",
     ruleMany: "여러 개 가능", ruleOne: "정확히 1개", ownYtif: "ytif 내장", ownProject: "프로젝트",
-    when: "When", whenSub: "소속 gate", whenText: "태그가 아닙니다. gate 소속(commit은 지정, 모든 검증은 CI와 skip-push 제외 시 push에 속함)을 씁니다.",
+    when: "When", whenSub: "소속 gate", whenText: "태그가 아닙니다. gate 소속(모든 검증은 CI에 속하고, commit과 push는 검증마다 정함)을 씁니다.",
   },
 };
 
@@ -321,7 +321,7 @@ function tagRows(c) {
 function gateBadges(c) {
   const gates = new Set(gatesOf(c));
   return `<span class="gates">${GATES.map(g =>
-    `<span class="gbadge${gates.has(g) ? " on" : ""}" title="${esc(g)}">${esc(g)}</span>`).join("")}${c.skip_push ? `<span class="gbadge skip" title="skip-push">skip-push</span>` : ""}</span>`;
+    `<span class="gbadge${gates.has(g) ? " on" : ""}" title="${esc(g)}">${esc(g)}</span>`).join("")}</span>`;
 }
 
 // ---- routing ----

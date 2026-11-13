@@ -19,7 +19,7 @@ var findingLine = regexp.MustCompile(`^([^\s:][^:]*):(\d+):(?:(\d+):)?(?:\s+(.*)
 
 // present prints outcomes, dispatch errors, and findings, emits GitHub
 // annotations when requested, and returns the exit code.
-func present(o Options, run outcome, findings []reconcile.Finding) int {
+func present(o Options, run outcome, findings []reconcile.Finding, emptyPush bool) int {
 	w := o.Stdout
 	reports, dispatch := run.reports, run.dispatch
 	github := o.Report == "github"
@@ -108,6 +108,10 @@ func present(o Options, run outcome, findings []reconcile.Finding) int {
 	failing := failed > 0 || len(dispatch) > 0 || invErrors > 0 || len(run.problems) > 0
 	if len(findings) > 0 {
 		failing = true
+	}
+	if emptyPush && !failing {
+		fmt.Fprintf(w, "ytif %s: not executed (no push members selected)\n", o.Gate)
+		return ExitPass
 	}
 	parts := []string{fmt.Sprintf("%d passed", passed)}
 	for _, p := range []struct {
